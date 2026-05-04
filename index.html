@@ -205,24 +205,20 @@ function doLoadBabelApp(){
           showStatus("Compile error: " + compileErr.message, "#f87171");
         }
       }, 200);
-          // Now render
+          // Show app - ReactDOM.createRoot renders synchronously in React 18
+          // Just need to hide loading and show app-root
           setTimeout(function(){
             try {
-              if(_appState && _appUser){
-                if(window._renderApp){
-                  document.getElementById("loading-app").style.display="none";
-                  document.getElementById("app-root").style.display="block";
-                  window._renderApp(_appState, _appUser);
-                } else {
-                  showStatus("ERROR: _renderApp not defined", "#f87171");
-                }
-              } else {
-                showStatus("ERROR: state=" + !!_appState + " user=" + !!_appUser, "#f87171");
+              document.getElementById("loading-app").style.display="none";
+              document.getElementById("app-root").style.display="block";
+              // If _renderApp exists, call it to ensure latest state is shown
+              if(window._renderApp && _appState) {
+                window._renderApp(_appState);
               }
             } catch(e2) {
-              showStatus("Render error: " + e2.message, "#f87171");
+              showStatus("Display error: " + e2.message, "#f87171");
             }
-          }, 500);
+          }, 800);
     } catch(e) {
       showStatus("Outer error: " + e.message, "#f87171");
     }
