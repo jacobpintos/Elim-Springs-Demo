@@ -193,8 +193,9 @@ function doLoadBabelApp(){
           showStatus("Step 3: Compiled OK (" + Math.round(transformed.length/1024) + "KB), executing...");
           setTimeout(function(){
             try {
-              var fn = new Function("React","ReactDOM","useState","useEffect","useRef","useCallback","useMemo", transformed);
-              fn(window.React,window.ReactDOM,window.React.useState,window.React.useEffect,window.React.useRef,window.React.useCallback,window.React.useMemo);
+              var globals = "var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useCallback=React.useCallback,useMemo=React.useMemo,useContext=React.useContext,useReducer=React.useReducer,useLayoutEffect=React.useLayoutEffect;\n";
+              var fn = new Function(globals + transformed);
+              fn();
               showStatus("Step 4: Executed OK, rendering...");
             } catch(execErr) {
               showStatus("Exec error: " + execErr.message, "#f87171");
