@@ -453,17 +453,30 @@ function doLoadBabelApp(){
           setTimeout(function(){
             try {
               var appRoot = document.getElementById("app-root");
+              showStatus("Checking render... appState=" + !!window._appState + " appUser=" + !!window._appUser + " rootChildren=" + (appRoot ? appRoot.children.length : "null"), "#60a5fa");
               if(appRoot && appRoot.children.length > 0) {
                 document.getElementById("loading-app").style.display="none";
                 appRoot.style.display="block";
                 if(window._renderApp && _appState) window._renderApp(_appState);
               } else {
-                showStatus("Render error: app-root is empty. Check console.", "#f87171");
-                document.getElementById("loading-app").style.display="flex";
+                // Try calling _renderApp manually if it exists
+                if(window._renderApp && window._appState && window._appUser) {
+                  showStatus("Re-triggering render...", "#fbbf24");
+                  window._renderApp(window._appState);
+                  setTimeout(function(){
+                    if(appRoot && appRoot.children.length > 0) {
+                      document.getElementById("loading-app").style.display="none";
+                      appRoot.style.display="block";
+                    } else {
+                      showStatus("ERROR: app-root still empty after re-render attempt", "#f87171");
+                    }
+                  }, 500);
+                } else {
+                  showStatus("ERROR: state=" + !!window._appState + " user=" + !!window._appUser + " renderApp=" + !!window._renderApp, "#f87171");
+                }
               }
             } catch(e2) {
               showStatus("Display error: " + e2.message, "#f87171");
-              document.getElementById("loading-app").style.display="flex";
             }
           }, 1200);
     } catch(e) {
