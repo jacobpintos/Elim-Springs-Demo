@@ -1,0 +1,122 @@
+rules_version = '2';
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Empower Iowa / Elim Springs — Firestore security rules
+//
+// Data model (school id lives at schools/{school}, e.g. "elim-springs"):
+//
+//   state/main            The teacher working document (the whole gradebook).
+//                         Readable / writable ONLY by teachers. This is what
+//                         closes the cross-family read hole: parents and
+//                         students never touch this document.
+//
+//   users/{uid}           One login record per Firebase Auth user. Fields:
+//                         role ("teacher" | "parent" | "student"), name,
+//                         email, studentIds[]. A user may read only their own
+//                         record; teachers read/write all. No one can set their
+//                         own role (no self-promotion to teacher).
+//
+//   portals/{studentId}   A per-student, read-only view model derived by the
+//                         teacher's app. Readable by teachers and by the linked
+//                         parent/student uids listed in the doc's allowedUids.
+//                         Only teachers write it.
+//
+//   responses/{studentId} Per-student permission-slip responses. Teachers
+//                         create and manage the allow list; a linked parent may
+//                         update only the "slips" field (their authorizations)
+//                         and cannot change who is allowed.
+//
+// Teacher identity: a founding teacher is matched by verified login email in
+// bootstrapTeacherEmails() below (works even before any user record exists, so
+// you can never lock yourself out). Additional teachers are granted by giving
+// their user record role == "teacher" (only an existing teacher can do that),
+// or by adding their email to the list below.
+// ─────────────────────────────────────────────────────────────────────────────
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    // Founding teacher/admin logins. Add more emails here if you prefer an
+    // allow-list to per-user role docs. Emails are lower-cased for comparison.
+    function bootstrapTeacherEmails() {
+      return [
+        'teacher@elimsprings.com'
+      ];
+    }
+
+    function bootstrapTeacher() {
+      return signedIn()
+        && request.auth.token.email != null
+        && request.auth.token.email.lower() in bootstrapTeacherEmails();
+    }
+
+    function userDocPath(school) {
+      return /databases/$(database)/documents/schools/$(school)/users/$(request.auth.uid);
+    }
+
+    function hasRole(school, role) {
+      return signedIn()
+        && exists(userDocPath(school))
+        && get(userDocPath(school)).data.role == role;
+    }
+
+    // A teacher is either a bootstrap email or a user record with role "teacher".
+    function isTeacher(school) {
+      return bootstrapTeacher() || hasRole(school, 'teacher');
+    }
+
+    // The current user is on a document's allow list (portals / responses).
+    function isLinked(rsc) {
+      return signedIn()
+        && rsc.data.allowedUids is list
+        && request.auth.uid in rsc.data.allowedUids;
+    }
+
+    match /schools/{school} {
+
+      // The school container document itself: teachers only.
+      allow read, write: if isTeacher(school);
+
+      // Teacher working state — the whole gradebook. Teachers only.
+      match /state/{doc} {
+        allow read, write: if isTeacher(school);
+      }
+
+      // Login records. Own-record read; teacher read/write all. Role is never
+      // self-settable, so unknown users can never become teacher.
+      match /users/{uid} {
+        allow read: if isTeacher(school) || (signedIn() && request.auth.uid == uid);
+        allow write: if isTeacher(school);
+      }
+
+      // Per-student portal view models. Read by teacher or linked users; only
+      // teachers write them.
+      match /portals/{studentId} {
+        allow read: if isTeacher(school) || isLinked(resource);
+        allow write: if isTeacher(school);
+      }
+
+      // Per-student permission-slip responses. Teacher creates/manages the
+      // allow list. A linked user may update ONLY the "slips" field and may not
+      // change allowedUids.
+      match /responses/{studentId} {
+        allow read: if isTeacher(school) || isLinked(resource);
+        allow create, delete: if isTeacher(school);
+        allow update: if isTeacher(school)
+          || (
+            isLinked(resource)
+            && request.resource.data.allowedUids == resource.data.allowedUids
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['slips'])
+          );
+      }
+
+      // Any other path under a school is denied by default.
+    }
+
+    // Everything else is denied by default.
+  }
+}
