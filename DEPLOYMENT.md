@@ -140,7 +140,24 @@ browser session:
   teacher is signed in (their app listens and merges). A parent authorizing
   overnight is recorded immediately in `responses/*` and is reflected in the
   teacher's view the next time the teacher app is open.
-- **Legacy fields:** `state.users` still carries demo/plaintext account records
-  from the pre-Firebase build; they are not real logins. Use **Clear All Data**
-  in Settings before going live to remove demo records (it now also clears the
-  `portals/*` and `responses/*` collections).
+- **Legacy fields:** `state.users` still carries demo account records from the
+  pre-Firebase build (name/email/role/links only — **no passwords**). They are
+  not real logins. Use **Clear All Data** in Settings before going live to
+  remove demo records (it now also clears the `portals/*` and `responses/*`
+  collections).
+
+## 7. Passwords
+
+Passwords are managed entirely by **Firebase Authentication** — none are stored
+in Firestore.
+
+- **Sign-in** uses Firebase email/password auth.
+- **Forgot password** on the sign-in screen sends a Firebase reset email (works
+  for teachers, parents, and students).
+- **Change password** is available in the teacher **Settings → My Password**
+  card and in the parent/student portal header, both via Firebase Auth
+  `updatePassword` (a recent sign-in may be required).
+- The **Accounts** screen no longer collects a password; it only links a person
+  to students. Creating the actual login is still a Firebase Auth step (console
+  or a future Cloud Function), after which the person can set their password via
+  “Forgot password?”.
