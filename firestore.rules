@@ -129,6 +129,12 @@ service cloud.firestore {
         allow write: if isStaff(school);
       }
 
+      // Daily gradebook snapshots (staff-only). Each doc is one day's full copy;
+      // metadata lives in state.saves and the app prunes docs older than 30 days.
+      match /snapshots/{snapId} {
+        allow read, write: if isStaff(school);
+      }
+
       // Per-student permission-slip responses. Staff create/manage the allow
       // list. A linked user may update ONLY the "slips" field.
       match /responses/{studentId} {

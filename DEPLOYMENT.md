@@ -205,3 +205,24 @@ copied into the parent/student portal docs.
   every write (and capped at 2000), and the tab only ever shows the last 30
   days, so nothing older is stored or displayed during normal use. No Firestore
   TTL policy or console configuration is required.
+
+## 9. Daily snapshots
+
+**Settings → Daily Snapshots** keeps one restorable backup of the gradebook per
+day, for 30 days.
+
+- **Capture:** the staff app takes a snapshot at local **midnight** (a timer),
+  and also catches up on load if the day has no snapshot yet — so a day is never
+  missed just because nobody had the app open at 00:00. Only one snapshot is
+  kept per calendar day.
+- **Storage:** because a Firestore document is capped at 1 MB, we can't hold 30
+  full copies of the gradebook inside `state/main`. Instead, small metadata
+  (`{id,date,timestamp}`) lives in `state.saves` (the list you see), and each
+  full day's copy lives in its own `snapshots/{id}` document — **staff-only** via
+  the rules. Requires deploying the updated `firestore.rules` (the `snapshots`
+  match).
+- **Retention:** on each capture, snapshot documents (and their metadata) older
+  than 30 days are deleted.
+- **Restore** rolls the gradebook back to that day's copy and reloads. Your
+  **snapshot history and activity log are preserved**, and the restore is itself
+  recorded in the activity log. A snapshot can also be deleted manually.
