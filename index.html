@@ -349,6 +349,7 @@ function doLogin(){
   errEl.style.display="none";
   document.querySelector(".login-btn").textContent="Signing in...";
   window._auth.signInWithEmailAndPassword(email,pw).catch(function(e){
+    if(e&&e.code==="auth/multi-factor-auth-required"){ _handleMfaSignIn(e); return; }
     errEl.style.color="#f87171";
     errEl.textContent="Invalid email or password.";
     errEl.style.display="block";
@@ -857,6 +858,75 @@ window._exportSheets=function(filename, sheets){
     XLSX.writeFile(wb, filename);
   });
 };
+
+// ─── Password policy ────────────────────────────────────────────────────────
+// Strong rules suitable for protecting student records. Enforced in-app wherever
+// a password is set (account creation, change-password). Firebase's own hosted
+// reset page enforces its own minimum; a matching server-side policy can also be
+// set once Identity Platform is enabled (see DEPLOYMENT.md).
+window._pwRules=[
+  {id:"len",   label:"At least 12 characters",         test:function(pw){return (pw||"").length>=12;}},
+  {id:"upper", label:"An uppercase letter (A–Z)",       test:function(pw){return /[A-Z]/.test(pw||"");}},
+  {id:"lower", label:"A lowercase letter (a–z)",        test:function(pw){return /[a-z]/.test(pw||"");}},
+  {id:"num",   label:"A number (0–9)",                  test:function(pw){return /[0-9]/.test(pw||"");}},
+  {id:"sym",   label:"A symbol (!@#$…)",                test:function(pw){return /[^A-Za-z0-9]/.test(pw||"");}},
+  {id:"email", label:"Not based on your email",         test:function(pw,email){var p=String(pw||"");if(!p)return false;var local=String(email||"").split("@")[0].toLowerCase();if(local.length<4)return true;return p.toLowerCase().indexOf(local)<0;}},
+  {id:"common",label:"Not a common/guessable password", test:function(pw){var p=String(pw||"").toLowerCase();if(!p)return false;var bad=["password","passw0rd","p@ssw0rd","123456","1234567","12345678","123456789","1234567890","qwerty","qwertyuiop","asdfgh","abc123","letmein","welcome","admin","iloveyou","monkey","dragon","football","baseball","000000","111111","elimsprings","empoweriowa","gradebook"];return !bad.some(function(b){return p.indexOf(b)>=0;});}}
+];
+window._pwIssues=function(pw,email){return window._pwRules.filter(function(r){return !r.test(pw,email);}).map(function(r){return r.label;});};
+window._genStrongPassword=function(){
+  var U="ABCDEFGHJKLMNPQRSTUVWXYZ",L="abcdefghijkmnpqrstuvwxyz",N="23456789",S="!@#$%^&*?-_=+";
+  function pick(set,n){var o="";for(var i=0;i<n;i++)o+=set.charAt(Math.floor(Math.random()*set.length));return o;}
+  var a=(pick(U,2)+pick(L,6)+pick(N,3)+pick(S,3)).split("");
+  for(var i=a.length-1;i>0;i--){var j=Math.floor(Math.random()*(i+1));var t=a[i];a[i]=a[j];a[j]=t;}
+  var pw=a.join("");
+  return window._pwIssues(pw,"").length?window._genStrongPassword():pw;
+};
+
+// ─── QR code (rendered client-side; the TOTP secret never leaves the browser) ─
+window._loadQR=function(){
+  return new Promise(function(res,rej){
+    if(window.qrcode) return res(window.qrcode);
+    var el=document.getElementById("qr-lib");
+    if(el){ el.addEventListener("load",function(){res(window.qrcode);}); el.addEventListener("error",rej); return; }
+    var s=document.createElement("script"); s.id="qr-lib";
+    s.src="https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js";
+    s.onload=function(){res(window.qrcode);}; s.onerror=function(){rej(new Error("qr load failed"));};
+    document.head.appendChild(s);
+  });
+};
+window._renderQR=function(elId,text){
+  window._loadQR().then(function(qrcode){
+    var el=document.getElementById(elId); if(!el) return;
+    var qr=qrcode(0,"M"); qr.addData(text); qr.make();
+    el.innerHTML=qr.createImgTag(4,8);
+  }).catch(function(){});
+};
+
+// ─── MFA (TOTP) sign-in challenge ────────────────────────────────────────────
+// Fires when an enrolled user signs in; requires Identity Platform + TOTP MFA
+// to be enabled on the Firebase project (see DEPLOYMENT.md).
+function _handleMfaSignIn(error){
+  var errEl=document.getElementById("login-err");
+  var btn=document.querySelector(".login-btn"); if(btn) btn.textContent="Sign In";
+  var resolver=error.resolver||(window._auth.getMultiFactorResolver&&window._auth.getMultiFactorResolver(error));
+  var Totp=(window.firebase&&firebase.auth&&firebase.auth.TotpMultiFactorGenerator)||null;
+  if(!resolver||!Totp){
+    if(errEl){errEl.style.color="#f87171";errEl.textContent="Two-factor sign-in isn't available here. Contact your administrator.";errEl.style.display="block";}
+    return;
+  }
+  var hints=resolver.hints||[];
+  var hint=hints.filter(function(h){return h.factorId===Totp.FACTOR_ID;})[0]||hints[0];
+  (function ask(){
+    var code=window.prompt("Two-factor authentication\n\nEnter the 6-digit code from your authenticator app:");
+    if(code===null) return;
+    code=String(code).replace(/\D/g,"");
+    var assertion;
+    try{ assertion=Totp.assertionForSignIn(hint.uid,code); }
+    catch(ex){ if(errEl){errEl.style.color="#f87171";errEl.textContent="Could not verify the code.";errEl.style.display="block";} return; }
+    resolver.resolveSignIn(assertion).catch(function(){ if(window.confirm("That code didn't work. Try again?")) ask(); });
+  })();
+}
 
 function doLogout(){
   _clearListeners();
