@@ -226,3 +226,17 @@ day, for 30 days.
 - **Restore** rolls the gradebook back to that day's copy and reloads. Your
   **snapshot history and activity log are preserved**, and the restore is itself
   recorded in the activity log. A snapshot can also be deleted manually.
+
+## 10. Excel export
+
+- **Gradebook → ⬇ Excel** exports the selected student's gradebook as an `.xlsx`
+  workbook: a **Summary** sheet (per-subject average and grade) and an
+  **Assignments** sheet (every assignment with score, max, and percent — or the
+  MDN mark and meaning for MDN students).
+- **Reports → Transcript → ⬇ Export to Excel** exports the generated transcript
+  as `.xlsx` (subjects × finalized quarters, final grade, and GPA columns for
+  grades 9–12).
+- Files download straight from the browser. The export uses the **SheetJS**
+  library, loaded on first use from cdnjs (the same CDN the app already uses for
+  React/Babel), so the first export needs a network connection; there are no
+  other dependencies and nothing is uploaded anywhere.
