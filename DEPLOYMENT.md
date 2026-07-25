@@ -188,3 +188,20 @@ in Firestore.
 - **Creating an account** (Accounts screen) provisions a real Firebase Auth
   login with a temporary password and emails a reset link; the new user sets
   their own password. No plaintext password is ever stored in Firestore.
+
+## 8. Activity log
+
+The **Activity** tab records who changed what and when. It is visible only to
+staff (admin/teacher) — the tab exists only in the staff app, and the entries
+live inside `state/main`, which the rules restrict to staff and which is never
+copied into the parent/student portal docs.
+
+- **What's captured:** gradebook edits (grades, attendance, behavior, notes, by
+  student name), roster and settings changes, quarter finalize/unlock,
+  promotion/archiving, and account create/remove/link changes — each with the
+  acting user's name and role and a timestamp. Rapid edits are coalesced into a
+  single entry per save.
+- **Retention:** entries are kept for **30 days**. Older entries are pruned on
+  every write (and capped at 2000), and the tab only ever shows the last 30
+  days, so nothing older is stored or displayed during normal use. No Firestore
+  TTL policy or console configuration is required.
