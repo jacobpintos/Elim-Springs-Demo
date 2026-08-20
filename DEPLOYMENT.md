@@ -285,6 +285,10 @@ is upgraded:
 > `index.html` to a newer release (the current 10.x line) and retest — the compat
 > API used here is stable across those versions.
 
+### Email verification
+- **Enrolling two-factor always requires a verified email** (Firebase's own rule). If a user hasn't verified, the Two-Factor card shows a **Send verification email** button instead of the setup flow — no effect on signing in.
+- **Optional sign-in gate:** set `window._requireEmailVerification=true` in `index.html` to also **block sign-in** until a non-admin's email is verified (a "Verify your email" screen with a resend button appears). **Default is `false`** so demo data with fake emails still logs in. Founding admin email(s) are **always exempt**, so you can't lock yourself out. Turn it on for production once real emails are in use — it's a one-line flip, on or off.
+
 ## 12. Idle auto-logout & Content-Security-Policy
 
 - **Idle auto-logout:** signed-in users are automatically signed out after **20
