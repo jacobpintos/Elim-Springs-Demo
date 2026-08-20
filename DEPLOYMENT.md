@@ -240,3 +240,71 @@ day, for 30 days.
   library, loaded on first use from cdnjs (the same CDN the app already uses for
   React/Babel), so the first export needs a network connection; there are no
   other dependencies and nothing is uploaded anywhere.
+
+## 11. Passwords & multi-factor authentication (MFA)
+
+### Strong passwords (on by default, no setup)
+Every place the app sets a password — creating an account, and the teacher and
+portal "change password" flows — enforces: **at least 12 characters, with an
+uppercase letter, a lowercase letter, a number, and a symbol, not based on the
+email, and not a common password.** A live checklist shows the rules, and
+"Generate" makes a compliant password. Firebase's own hosted **reset** page
+enforces its own minimum; to make it match, turn on the **server-side password
+policy** under Identity Platform (below).
+
+### MFA via authenticator app (TOTP) — requires enabling in Firebase
+The code for two-factor authentication is built in (enrollment UI in **Settings**
+and the portal, plus a sign-in code prompt), but it only works once the project
+is upgraded:
+
+1. In the Firebase console, upgrade the project to the **Blaze (pay-as-you-go)**
+   plan (MFA requires it). Review **Identity Platform pricing** and set a Google
+   Cloud **budget alert** first.
+2. Firebase console → **Authentication → Sign-in method → Advanced /
+   Multi-factor** → enable **Identity Platform**, then enable **TOTP
+   (authenticator app)** as a second factor. (Do **not** rely on SMS — it costs
+   per text; TOTP is what this app uses and sends no messages.)
+3. Users then open **Settings → Two-Factor Authentication** (staff) or the
+   portal's password screen, tap **Set up two-factor**, scan the QR code with any
+   authenticator app (Microsoft Authenticator, Google Authenticator, Authy,
+   1Password…), and enter a code. From then on, sign-in asks for the 6-digit code.
+
+- **Recommended for every staff account** (they can see student records).
+- **Lost device:** an admin removes MFA from that user in the Firebase console
+  (Authentication → the user → remove second factor); the user re-enrolls.
+- Until step 2 is done, the 2FA screen shows "not enabled yet" and sign-in works
+  with password only — nothing breaks.
+
+> The live MFA flow was **not** testable during development (it needs Identity
+> Platform enabled), so verify enrollment and a code-prompted sign-in end-to-end
+> once you turn it on.
+>
+> If the Two-Factor screen still says "not enabled" **after** you've turned on
+> Identity Platform + TOTP, the bundled Firebase SDK may predate TOTP support.
+> Update the three `firebasejs/9.23.0/...` `<script>` URLs at the top of
+> `index.html` to a newer release (the current 10.x line) and retest — the compat
+> API used here is stable across those versions.
+
+## 12. Idle auto-logout & Content-Security-Policy
+
+- **Idle auto-logout:** signed-in users are automatically signed out after **20
+  minutes** of inactivity (adjust via `window._idleMinutes` in `index.html`) to
+  protect unattended or shared devices.
+- **Content-Security-Policy:** the page's CSP is restricted to the specific CDNs
+  and Firebase endpoints the app uses (instead of the previous `default-src *`).
+  **Test sign-in, Firestore reads/writes, fonts, and Excel/QR export after
+  deploying**; if something is blocked, the browser console names the blocked
+  host — add it to the CSP `<meta>` in `index.html`, or revert that one line to
+  the previous `default-src *` value while you investigate.
+
+## 13. FERPA / privacy
+
+Protecting student records is mostly **policy**, not code. See:
+
+- `docs/DATA_PROTECTION_CHECKLIST.md` — what the app covers and the policy items still needed.
+- `docs/PRIVACY_NOTICE.md` — draft family privacy notice.
+- `docs/FERPA_ANNUAL_NOTICE.md` — draft annual notice of rights.
+
+These are **starting-point drafts** to adapt and review with counsel — not final
+legal text. Confirm which laws bind your school (FERPA applies to schools
+receiving federal education funding; state law and COPPA may also apply).
