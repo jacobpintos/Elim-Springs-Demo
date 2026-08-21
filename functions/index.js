@@ -9,11 +9,13 @@
  * Both functions are admin-only and re-check that server-side; never trust the
  * client's own claim about who it is.
  *
+ * 2nd-gen callables (firebase-functions v7). Region is pinned to us-central1
+ * because the web client calls httpsCallable() without specifying a region.
+ *
  * Deploy:  firebase deploy --only functions      (requires the Blaze plan)
- * If the app is served from another origin, see the CORS note in DEPLOYMENT.md.
  */
 
-const functions = require("firebase-functions");
+const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
@@ -23,6 +25,8 @@ const SCHOOL_ID = "elim-springs";
 // Keep in sync with bootstrapAdminEmails() in firestore.rules and
 // window._bootstrapAdminEmails in index.html.
 const BOOTSTRAP_ADMIN_EMAILS = ["teacher@elimsprings.com"];
+
+const OPTS = { region: "us-central1", maxInstances: 10 };
 
 const db = () => admin.firestore();
 const userDoc = (uid) => db().doc(`schools/${SCHOOL_ID}/users/${uid}`);
@@ -39,16 +43,13 @@ async function roleOf(uid) {
 }
 
 /** Throws unless the caller is an admin (bootstrap email, or role === "admin"). */
-async function assertAdmin(context) {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Sign in first.");
+async function assertAdmin(request) {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
   }
-  if (isBootstrapEmail(context.auth.token.email)) return;
-  if ((await roleOf(context.auth.uid)) === "admin") return;
-  throw new functions.https.HttpsError(
-    "permission-denied",
-    "Only an admin can manage accounts."
-  );
+  if (isBootstrapEmail(request.auth.token && request.auth.token.email)) return;
+  if ((await roleOf(request.auth.uid)) === "admin") return;
+  throw new HttpsError("permission-denied", "Only an admin can manage accounts.");
 }
 
 /** uids of everyone holding an admin role record. */
@@ -61,25 +62,22 @@ async function adminUids() {
  * Delete ONE account: its Firebase Auth sign-in and its role record.
  * Refuses to remove the caller, or the last remaining admin.
  */
-exports.deleteAccount = functions.https.onCall(async (data, context) => {
-  await assertAdmin(context);
+exports.deleteAccount = onCall(OPTS, async (request) => {
+  await assertAdmin(request);
 
-  const uid = String((data && data.uid) || "");
+  const uid = String((request.data && request.data.uid) || "");
   if (!uid) {
-    throw new functions.https.HttpsError("invalid-argument", "uid is required.");
+    throw new HttpsError("invalid-argument", "uid is required.");
   }
-  if (uid === context.auth.uid) {
-    throw new functions.https.HttpsError(
-      "failed-precondition",
-      "You cannot delete your own account."
-    );
+  if (uid === request.auth.uid) {
+    throw new HttpsError("failed-precondition", "You cannot delete your own account.");
   }
 
   const role = await roleOf(uid);
   if (role === "admin") {
     const admins = await adminUids();
     if (admins.size <= 1) {
-      throw new functions.https.HttpsError(
+      throw new HttpsError(
         "failed-precondition",
         "This is the last admin account. Create another admin first."
       );
@@ -96,7 +94,7 @@ exports.deleteAccount = functions.https.onCall(async (data, context) => {
     if (e && e.code === "auth/user-not-found") {
       authDeleted = false; // record existed without a login; nothing to remove
     } else {
-      throw new functions.https.HttpsError("internal", (e && e.message) || "Auth delete failed.");
+      throw new HttpsError("internal", (e && e.message) || "Auth delete failed.");
     }
   }
 
@@ -107,11 +105,11 @@ exports.deleteAccount = functions.https.onCall(async (data, context) => {
  * Delete EVERY non-admin sign-in — used by "Clear All Data".
  * Admin role records, bootstrap admin emails and the caller are always kept.
  */
-exports.purgeNonAdminAuth = functions.https.onCall(async (data, context) => {
-  await assertAdmin(context);
+exports.purgeNonAdminAuth = onCall(OPTS, async (request) => {
+  await assertAdmin(request);
 
   const keep = await adminUids();
-  keep.add(context.auth.uid);
+  keep.add(request.auth.uid);
 
   // Collect every user first — deleting while paginating can skip entries.
   const all = [];
