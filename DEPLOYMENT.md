@@ -109,9 +109,10 @@ The creator is shown a temporary password to hand off; the new user can also use
   The staff app then publishes each student's `portals/*` read-model and
   scaffolds `responses/*` automatically.
 - **Removing:** "Remove" deletes the `users/{uid}` role record, which revokes
-  app access immediately. The underlying **Firebase Auth login** is not deleted
-  by the web app — remove it in **Authentication → Users** in the console (or via
-  a Cloud Function) if you want the sign-in gone entirely.
+  app access immediately. If the Cloud Functions are deployed (§14) the
+  **Firebase Auth sign-in is deleted too**; otherwise the app tells you to remove
+  it in **Authentication → Users** in the console. The last admin can never be
+  removed.
 
 > Requires the **Email/Password** provider to be enabled in Firebase
 > Authentication (it already is, since sign-in uses it).
@@ -160,8 +161,9 @@ browser session:
 
 ## 6. Known limitations / follow-ups
 
-- **Account deletion** removes the role record (app access) but not the Firebase
-  Auth login itself — do that in the console or via a Cloud Function.
+- **Account deletion** removes the Auth sign-in as well once the Cloud Functions
+  are deployed (§14); without them it removes only the role record (which still
+  revokes access) and tells you which sign-in to delete in the console.
 - **Per-classroom isolation** is scaffolded (see §4a) but not yet enforced; today
   all staff see all students.
 - **Slip reconciliation** into the teacher's master document happens while the
