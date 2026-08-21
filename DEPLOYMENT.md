@@ -312,3 +312,42 @@ Protecting student records is mostly **policy**, not code. See:
 These are **starting-point drafts** to adapt and review with counsel — not final
 legal text. Confirm which laws bind your school (FERPA applies to schools
 receiving federal education funding; state law and COPPA may also apply).
+
+## 14. Cloud Functions — deleting sign-ins (optional but recommended)
+
+A web page can delete Firestore documents but **cannot delete another person's
+Firebase Authentication sign-in** — only the Admin SDK can. Two admin-only
+callable functions in `functions/index.js` close that gap:
+
+| Function | Used by | What it does |
+|---|---|---|
+| `deleteAccount` | Accounts → **Remove** | Deletes that user's Auth sign-in *and* their role record. Refuses to delete you, or the last admin. |
+| `purgeNonAdminAuth` | Settings → **Clear All Data** | Deletes every non-admin sign-in. Admin accounts, bootstrap admin emails, and the caller are always kept. |
+
+Both re-check server-side that the caller is an admin (bootstrap email or a
+`role: "admin"` record) — the client's claim is never trusted.
+
+### Deploy
+
+```bash
+cd functions && npm install && cd ..
+firebase deploy --only functions
+```
+
+Requires the **Blaze (pay-as-you-go)** plan — same as MFA. For a school's
+handful of calls this sits inside the free monthly allowance, but review current
+Cloud Functions pricing and set a budget alert first.
+
+Keep `BOOTSTRAP_ADMIN_EMAILS` and `SCHOOL_ID` at the top of `functions/index.js`
+in sync with `firestore.rules` and `index.html`.
+
+### Without deploying
+
+Everything still works: removing an account deletes the role record (which
+revokes app access immediately) and the app tells you the sign-in must be
+removed in the Firebase console. Clear All Data likewise lists the exact emails
+to delete. Deploying simply makes that automatic.
+
+> The functions were **not** live-tested during development (they need a
+> deployed Blaze project). Verify both flows once deployed — especially that a
+> non-admin is rejected and that the last admin cannot be deleted.

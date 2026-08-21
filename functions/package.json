@@ -1,0 +1,13 @@
+{
+  "name": "elim-springs-functions",
+  "description": "Admin-only Cloud Functions for account deletion (Firebase Auth).",
+  "main": "index.js",
+  "engines": {
+    "node": "20"
+  },
+  "dependencies": {
+    "firebase-admin": "^12.1.0",
+    "firebase-functions": "^4.9.0"
+  },
+  "private": true
+}
