@@ -1,0 +1,13 @@
+{
+  "name": "elim-springs-gradebook",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Empower Iowa — Elim Springs Campus gradebook. Edit src/app.jsx, then npm run build to compile it into index.html.",
+  "scripts": {
+    "build": "node build.js"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.28.4",
+    "@babel/preset-react": "^7.27.1"
+  }
+}

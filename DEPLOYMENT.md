@@ -1,6 +1,6 @@
 # Deployment & data-isolation guide
 
-This app is a single-file web app (`index.html`) backed by Firebase Auth +
+This app is a web app served as a single `index.html`, backed by Firebase Auth +
 Cloud Firestore. This document covers the **security rules** and the
 **per-family data isolation** introduced alongside the demo-data fix, plus how
 to add teachers and parent/student logins.
@@ -8,6 +8,59 @@ to add teachers and parent/student logins.
 > **Important:** the security rules in `firestore.rules` are the *entire* access
 > control layer. The app is only as safe as the deployed rules. Until you deploy
 > them (step 1), Firestore uses whatever rules your project currently has.
+
+> **Editing the app?** The interface lives in `src/app.jsx`, not in
+> `index.html`. Run `npm run build` after every change — see
+> [section 0](#0-editing-the-app-npm-run-build).
+
+---
+
+## 0. Editing the app (`npm run build`)
+
+The app is written in JSX, which browsers cannot run directly. It used to be
+shipped as a giant string inside `index.html` and translated in the browser by
+Babel on every single sign-in — which is why signing in used to pause on a
+series of technical messages, why the page pulled a compiler down from a CDN,
+and why the Content-Security-Policy had to permit `unsafe-eval`.
+
+That translation now happens once, here, at build time.
+
+| File | Role |
+| --- | --- |
+| `src/app.jsx` | **Edit this.** The entire teacher/parent/student interface. |
+| `build.js` | Compiles `src/app.jsx` and injects the result into `index.html`. |
+| `index.html` | Generated + hand-maintained: the login screen, Firebase wiring, and the compiled app between the `APP-CODE` markers. |
+
+One-time setup:
+
+```bash
+npm install
+```
+
+After any change to `src/app.jsx`:
+
+```bash
+npm run build
+```
+
+That rewrites everything between `<!-- APP-CODE:START -->` and
+`<!-- APP-CODE:END -->` in `index.html`. Never hand-edit that region — the next
+build overwrites it.
+
+**Commit `index.html` along with `src/app.jsx`.** GitHub Pages serves files
+as-is and runs no build of its own, so an un-rebuilt `index.html` means the
+live site keeps serving the previous version of the app. Re-running the build
+with no source change produces a byte-identical file, so it is safe to run at
+any time (e.g. before committing, to confirm the two are in sync).
+
+`node_modules/` is git-ignored; the build tools are needed only on the machine
+doing the editing.
+
+What this bought us:
+
+- Sign-in no longer waits for a compiler to load and run.
+- `unsafe-eval` is gone from the Content-Security-Policy (section 12).
+- One less third-party CDN in the page's trust chain.
 
 ---
 
@@ -240,7 +293,7 @@ day, for 30 days.
   grades 9–12).
 - Files download straight from the browser. The export uses the **SheetJS**
   library, loaded on first use from cdnjs (the same CDN the app already uses for
-  React/Babel), so the first export needs a network connection; there are no
+  React), so the first export needs a network connection; there are no
   other dependencies and nothing is uploaded anywhere.
 
 ## 11. Passwords & multi-factor authentication (MFA)
@@ -298,6 +351,9 @@ is upgraded:
   protect unattended or shared devices.
 - **Content-Security-Policy:** the page's CSP is restricted to the specific CDNs
   and Firebase endpoints the app uses (instead of the previous `default-src *`).
+  It also **no longer allows `unsafe-eval`**, because the app is compiled at
+  build time (section 0) rather than in the browser — so a script injected into
+  the page cannot use `eval`/`new Function` to run itself.
   **Test sign-in, Firestore reads/writes, fonts, and Excel/QR export after
   deploying**; if something is blocked, the browser console names the blocked
   host — add it to the CSP `<meta>` in `index.html`, or revert that one line to
