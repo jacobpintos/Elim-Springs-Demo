@@ -1893,6 +1893,19 @@ function CalcFinalView({results}) {
   );
 }
 
+// A labelled field for the add-assignment form. The form used to be a row of
+// bare inputs — two identical date boxes and a "1x" dropdown with nothing to
+// say what either meant.
+function AssignField({label,hint,children}) {
+  return (
+    <div style={{marginBottom:12}}>
+      <div style={{fontSize:11,fontWeight:600,color:"var(--t2)",marginBottom:4}}>{label}</div>
+      {children}
+      {hint&&<div style={{fontSize:10,color:"var(--t2)",marginTop:4,lineHeight:1.45}}>{hint}</div>}
+    </div>
+  );
+}
+
 function GradebookPanel({stuId,state,upd,isMobile,sortBy,displayQId,selectedQId,setSelectedQId,autoQ,fqMap}) {
   const [ed,setEd]=useState(null);
   const [sv,setSv]=useState("");
@@ -1906,7 +1919,7 @@ function GradebookPanel({stuId,state,upd,isMobile,sortBy,displayQId,selectedQId,
   const [addingAssign,setAddingAssign]=useState(null);
   const [newAssign,setNewAssign]=useState({name:"",maxScore:100,date:today(),dueDate:"",repeat:1,repeatInterval:7,category:"homework"});
   const [showInactiveSubs,setShowInactiveSubs]=useState(false);
-  const [assignDateError,setAssignDateError]=useState("");
+  const [assignError,setAssignError]=useState("");
 
   const stu=state.students.find(s=>s.id===stuId);
   if(!stu) return null;
@@ -1939,7 +1952,19 @@ function GradebookPanel({stuId,state,upd,isMobile,sortBy,displayQId,selectedQId,
     });
   };
   const addAssignment=(subId)=>{
-    if(!newAssign.name.trim()) return;
+    // Say why nothing happened rather than ignoring the click.
+    if(!newAssign.name.trim()){
+      setAssignError("Give this "+(newAssign.category==="test"?"quiz or test":"assignment")+" a name first.");
+      return;
+    }
+    if(!newAssign.date){
+      setAssignError("Pick the date this goes out.");
+      return;
+    }
+    if(newAssign.dueDate&&newAssign.dueDate<newAssign.date){
+      setAssignError("The due date is before the assigned date. Swap them, or clear the due date.");
+      return;
+    }
     const sub2=subs.find(s=>s.id===subId);
     const allQ2=[...allQ,...finalizedQ];
     const range=subjectDateRange(sub2,allQ2);
@@ -1952,7 +1977,7 @@ function GradebookPanel({stuId,state,upd,isMobile,sortBy,displayQId,selectedQId,
       const dateStr=d.toISOString().slice(0,10);
       const dd=newAssign.dueDate?new Date(new Date(newAssign.dueDate+"T12:00:00").getTime()+i*interval*86400000).toISOString().slice(0,10):"";
       if(range&&dateStr&&(dateStr<range.start||dateStr>range.end)){
-        setAssignDateError("Instance "+(i+1)+": date "+fmt(dateStr)+" is outside this subject's active date range ("+fmt(range.start)+" – "+fmt(range.end)+"). Adjust quarter dates in Settings.");
+        setAssignError("Instance "+(i+1)+": date "+fmt(dateStr)+" is outside this subject's active date range ("+fmt(range.start)+" – "+fmt(range.end)+"). Adjust quarter dates in Settings.");
         return;
       }
       const label=repeat>1?newAssign.name+" "+(i+1):newAssign.name;
@@ -1960,10 +1985,10 @@ function GradebookPanel({stuId,state,upd,isMobile,sortBy,displayQId,selectedQId,
     }
     const lockedNew=newAssigns.find(a=>isDateLocked(a.date,state.finalizedQuarters,state.sy?.quarters));
     if(lockedNew){
-      setAssignDateError("Date "+fmt(lockedNew.date)+" falls in a finalized quarter. Unlock it in Settings to add work there.");
+      setAssignError("Date "+fmt(lockedNew.date)+" falls in a finalized quarter. Unlock it in Settings to add work there.");
       return;
     }
-    setAssignDateError("");
+    setAssignError("");
     upd(p=>({...p,subjects:{...p.subjects,[stu.id]:(p.subjects[stu.id]||[]).map(s=>s.id===subId?{...s,assignments:[...s.assignments,...newAssigns]}:s)}}));
     setNewAssign({name:"",maxScore:100,date:today(),dueDate:"",repeat:1,repeatInterval:7,category:"homework"});setAddingAssign(null);
     remindYearDates(state);
@@ -2165,24 +2190,77 @@ function GradebookPanel({stuId,state,upd,isMobile,sortBy,displayQId,selectedQId,
               </div>
             </div>
             {addingAssign===sub.id&&<div style={{marginBottom:10}}>
-              {assignDateError&&<div style={{background:"rgba(248,113,113,0.1)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:6,padding:"8px 10px",fontSize:11,color:"var(--red)",marginBottom:8}}>⚠️ {assignDateError}</div>}
-              <div style={{background:"var(--bg)",border:"1px solid var(--br2)",borderRadius:7,padding:10,display:"flex",gap:7,alignItems:"center",flexWrap:"wrap"}}>
-                <div style={{display:"flex",gap:4,marginBottom:0}}>
-                  <button className={"bs"+(newAssign.category==="homework"?" p":"")} style={{fontSize:10,padding:"4px 8px"}} onClick={()=>setNewAssign(f=>({...f,category:"homework"}))}>📝 Homework</button>
-                  <button className={"bs"+(newAssign.category==="test"?" p":"")} style={{fontSize:10,padding:"4px 8px"}} onClick={()=>setNewAssign(f=>({...f,category:"test"}))}>📋 Quiz/Test</button>
+              {assignError&&<div style={{background:"rgba(248,113,113,0.1)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:6,padding:"8px 10px",fontSize:11,color:"var(--red)",marginBottom:8}}>⚠️ {assignError}</div>}
+              <div style={{background:"var(--bg)",border:"1px solid var(--br2)",borderRadius:9,padding:14}}>
+                <div style={{fontSize:12,fontWeight:700,marginBottom:2}}>
+                  New {newAssign.category==="test"?"quiz or test":"assignment"} · {sub.name}
                 </div>
-                <input className="ins" placeholder={newAssign.category==="test"?"Quiz/Test name":"Assignment name"} value={newAssign.name} onChange={e=>setNewAssign(f=>({...f,name:e.target.value}))} style={{flex:1}}/>
-                {!mdn&&<input className="ins" type="number" placeholder="Max pts" value={newAssign.maxScore} onChange={e=>setNewAssign(f=>({...f,maxScore:e.target.value}))} style={{width:70}}/>}
-                <input className="ins" type="date" value={newAssign.date} onChange={e=>setNewAssign(f=>({...f,date:e.target.value}))} title="Assigned date"/>
-                <input className="ins" type="date" value={newAssign.dueDate} onChange={e=>setNewAssign(f=>({...f,dueDate:e.target.value}))} title="Due date"/>
-                <select className="ins" style={{width:60}} value={newAssign.repeat} onChange={e=>setNewAssign(f=>({...f,repeat:parseInt(e.target.value)}))}>
-                  {[1,2,3,4,5,6,7,8,9,10,12,16,18,20,24,36].map(n=><option key={n} value={n}>{n}x</option>)}
-                </select>
-                {newAssign.repeat>1&&<select className="ins" style={{width:80}} value={newAssign.repeatInterval} onChange={e=>setNewAssign(f=>({...f,repeatInterval:parseInt(e.target.value)}))}>
-                  {[[1,"daily"],[7,"weekly"],[14,"bi-wkly"],[30,"monthly"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
-                </select>}
-                <button className="bp" style={{fontSize:11}} onClick={()=>addAssignment(sub.id)}>{newAssign.repeat>1?"Add "+newAssign.repeat+"x":"Add"}</button>
-                <button className="bg" style={{fontSize:11}} onClick={()=>{setAddingAssign(null);setAssignDateError("");}}>Cancel</button>
+                <div style={{fontSize:11,color:"var(--t2)",marginBottom:14}}>
+                  {stu.name} only. Leave the score blank now — you'll fill it in once it's graded.
+                </div>
+
+                <AssignField label="Type">
+                  <div style={{display:"flex",gap:6}}>
+                    <button className={"bs"+(newAssign.category==="homework"?" p":"")} onClick={()=>setNewAssign(f=>({...f,category:"homework"}))}>📝 Homework</button>
+                    <button className={"bs"+(newAssign.category==="test"?" p":"")} onClick={()=>setNewAssign(f=>({...f,category:"test"}))}>📋 Quiz/Test</button>
+                  </div>
+                </AssignField>
+
+                <AssignField label="Name" hint="What the student and parents will see.">
+                  <input className="ins" style={{width:"100%"}} autoFocus
+                    placeholder={newAssign.category==="test"?"e.g. Chapter 4 Quiz":"e.g. Rhetorical Analysis Essay"}
+                    value={newAssign.name}
+                    onChange={e=>{setNewAssign(f=>({...f,name:e.target.value}));if(assignError)setAssignError("");}}
+                    onKeyDown={e=>e.key==="Enter"&&addAssignment(sub.id)}/>
+                </AssignField>
+
+                <div style={{display:"grid",gridTemplateColumns:isMobile?"1fr":"repeat("+(mdn?2:3)+",minmax(0,1fr))",gap:12,marginBottom:2}}>
+                  {!mdn&&<AssignField label="Points possible" hint="What a perfect score is worth.">
+                    <input className="ins" type="number" min="1" style={{width:"100%"}} value={newAssign.maxScore}
+                      onChange={e=>setNewAssign(f=>({...f,maxScore:e.target.value}))}/>
+                  </AssignField>}
+                  <AssignField label="Assigned" hint="The day you hand it out. This is the date that decides which quarter it counts toward.">
+                    <input className="ins" type="date" style={{width:"100%"}} value={newAssign.date}
+                      onChange={e=>{setNewAssign(f=>({...f,date:e.target.value}));if(assignError)setAssignError("");}}/>
+                  </AssignField>
+                  <AssignField label="Due (optional)" hint="Shows on the family calendar and flags the work as overdue once it passes.">
+                    <input className="ins" type="date" style={{width:"100%"}} value={newAssign.dueDate} min={newAssign.date||undefined}
+                      onChange={e=>{setNewAssign(f=>({...f,dueDate:e.target.value}));if(assignError)setAssignError("");}}/>
+                  </AssignField>
+                </div>
+
+                <AssignField label="Repeat" hint="For work that recurs on a schedule — a weekly spelling list, a daily reading log.">
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                    <select className="ins" value={newAssign.repeat} onChange={e=>setNewAssign(f=>({...f,repeat:parseInt(e.target.value)}))}>
+                      <option value={1}>Just once</option>
+                      {[2,3,4,5,6,7,8,9,10,12,16,18,20,24,36].map(n=><option key={n} value={n}>{n} times</option>)}
+                    </select>
+                    {newAssign.repeat>1&&<select className="ins" value={newAssign.repeatInterval} onChange={e=>setNewAssign(f=>({...f,repeatInterval:parseInt(e.target.value)}))}>
+                      {[[1,"every day"],[7,"every week"],[14,"every 2 weeks"],[30,"every month"]].map(([v,l])=><option key={v} value={v}>{l}</option>)}
+                    </select>}
+                  </div>
+                </AssignField>
+
+                {newAssign.repeat>1&&(()=>{
+                  // Spell out exactly what the Add button is about to create.
+                  const n=newAssign.repeat, iv=newAssign.repeatInterval;
+                  const base=newAssign.name.trim()||"Assignment";
+                  const last=newAssign.date?new Date(new Date(newAssign.date+"T12:00:00").getTime()+(n-1)*iv*86400000).toISOString().slice(0,10):"";
+                  return (
+                    <div style={{background:"rgba(26,106,26,0.07)",border:"1px solid rgba(26,106,26,0.2)",borderRadius:7,
+                      padding:"9px 11px",fontSize:11,color:"var(--t2)",marginBottom:12}}>
+                      Creates <strong>{n} separate assignments</strong> — “{base} 1” through “{base} {n}”
+                      {last?<> — dated {fmt(newAssign.date)} through {fmt(last)}</>:null}. Each is graded on its own.
+                    </div>
+                  );
+                })()}
+
+                <div style={{display:"flex",gap:7,flexWrap:"wrap",borderTop:"1px solid var(--br)",paddingTop:12}}>
+                  <button className="bp" onClick={()=>addAssignment(sub.id)}>
+                    {newAssign.repeat>1?"Add "+newAssign.repeat+" assignments":"Add assignment"}
+                  </button>
+                  <button className="bg" onClick={()=>{setAddingAssign(null);setAssignError("");}}>Cancel</button>
+                </div>
               </div>
             </div>}
             <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
