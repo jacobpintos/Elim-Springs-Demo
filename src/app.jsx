@@ -813,7 +813,7 @@ function buildDemoState() {
       responses:{},
     },
     {
-      id:"ev3", name:"Thanksgiving Break", location:"—",
+      id:"ev3", name:"Thanksgiving Break", location:"",
       startDate:"2024-11-25", endDate:"2024-11-29",
       description:"No classes. Enjoy the holiday!",
       assignedStudents:["s1","s2","s3","s4","s5","s6"],
@@ -3074,14 +3074,57 @@ function buildQuarterItems(sy, finalizedQuarters) {
   return items;
 }
 
+// One source of truth for calendar dot colors. On a phone the month grid shows
+// only dots and the readable list sits underneath it, so the two have to agree —
+// a dot and its list row must never be different colors.
+const CAL_DOT={
+  event:"var(--acc)",  break:"var(--acc)", cancel:"var(--red)", delay:"var(--yel)",
+  qstart:"var(--grn)", qend:"var(--yel)",
+  due:"var(--pur)",
+};
+/** Color for a calendar event or special day (break / cancellation / delay). */
+function calDotEvent(e){
+  if(e._type!=="special") return CAL_DOT.event;
+  return CAL_DOT[e.spType]||CAL_DOT.event;
+}
+/**
+ * Color for schoolwork due on a day. Tests and homework share one color on
+ * purpose: a 6px dot is too small to read a second purple against, and the
+ * list beneath the grid names each item anyway.
+ */
+function calDotDue(){ return CAL_DOT.due; }
+/** Color for a quarter boundary. */
+function calDotQuarter(q){ return q.qType==="end"?CAL_DOT.qend:CAL_DOT.qstart; }
+
+/**
+ * Events and special days (breaks, cancellations, delays) as one display list.
+ * A school that enters "Thanksgiving Break" as both an event and a break day
+ * would otherwise see it twice. The special day wins on type — that is what
+ * decides the color and whether school is in session — but the event's id
+ * comes along so the entry stays clickable.
+ */
+function calendarItems(events,specialDays){
+  const key=e=>String(e.name||"").trim().toLowerCase()+"|"+e.startDate+"|"+e.endDate;
+  const specials=new Map((specialDays||[]).filter(d=>d.startDate&&d.endDate).map(d=>{
+    const s={id:d.id,_type:"special",spType:d.type,startDate:d.startDate,endDate:d.endDate,
+      name:d.note||(d.type==="break"?"Break":d.type==="cancel"?"No school":d.type==="delay"?"Late start":"Special day")};
+    return [key(s),s];
+  }));
+  const out=[];
+  (events||[]).forEach(e=>{
+    const dup=specials.get(key(e));
+    if(dup){ specials.delete(key(e)); out.push({...dup,eventId:e.id,location:e.location}); }
+    else out.push({...e,_type:"event",eventId:e.id});
+  });
+  specials.forEach(s=>out.push(s));
+  return out;
+}
+
 function EventCalendarGrid({calMonth,state,setViewing,showAssignments,dueDateMap,onViewDue,quarterItems,showAttendance,attStudentId,onMarkAtt,onViewAtt,portalMode,compact}) {
   const [y,m]=calMonth.split("-").map(Number);
   const firstDay=new Date(y,m-1,1).getDay();
   const daysInMonth=new Date(y,m,0).getDate();
-  const allItems=[
-    ...(state.events||[]).map(e=>({...e,_type:"event"})),
-    ...(state.specialDays||[]).filter(d=>d.startDate&&d.endDate).map(d=>({id:d.id,name:d.note||(d.type==="break"?"Break":"Special"),startDate:d.startDate,endDate:d.endDate,_type:"special",spType:d.type}))
-  ];
+  const allItems=calendarItems(state.events,state.specialDays);
   const cells=[];
   for(let i=0;i<firstDay;i++) cells.push(null);
   for(let d=1;d<=daysInMonth;d++) cells.push(d);
@@ -3110,9 +3153,9 @@ function EventCalendarGrid({calMonth,state,setViewing,showAssignments,dueDateMap
               {compact&&(()=>{
                 const qm=(quarterItems||[]).filter(q=>q.startDate===ds||q.endDate===ds);
                 const dots=[
-                  ...qm.map(q=>({k:"q"+q.id,c:q.qType==="end"?"var(--yel)":"var(--grn)"})),
-                  ...dayItems.map(e=>({k:"e"+e.id,c:e._type==="special"?(e.spType==="cancel"?"var(--red)":e.spType==="delay"?"var(--yel)":"var(--acc)"):"var(--acc)"})),
-                  ...dueItems.map((x,ix)=>({k:"d"+ix,c:x.category==="test"?"var(--pur)":"var(--t3)"})),
+                  ...qm.map(q=>({k:"q"+q.id,c:calDotQuarter(q)})),
+                  ...dayItems.map(e=>({k:"e"+e.id,c:calDotEvent(e)})),
+                  ...dueItems.map((x,ix)=>({k:"d"+ix,c:calDotDue()})),
                 ];
                 if(!dots.length) return null;
                 return <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:2}}>
@@ -3163,8 +3206,8 @@ function EventCalendarGrid({calMonth,state,setViewing,showAssignments,dueDateMap
                 <div key={e.id} style={{fontSize:9,padding:"1px 4px",borderRadius:3,marginBottom:1,
                   background:e._type==="special"?(e.spType==="break"?"rgba(76,175,80,0.2)":e.spType==="cancel"?"rgba(248,113,113,0.2)":"rgba(251,191,36,0.2)"):"rgba(76,175,80,0.15)",
                   color:e._type==="special"?(e.spType==="break"?"var(--acc)":e.spType==="cancel"?"var(--red)":"var(--yel)"):"var(--t1)",
-                  cursor:"pointer",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
-                  onClick={()=>e._type==="event"&&setViewing(e.id)}
+                  cursor:e.eventId?"pointer":"default",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}
+                  onClick={()=>e.eventId&&setViewing(e.eventId)}
                   title={e.name}>
                   {e.name}
                 </div>
@@ -5466,13 +5509,18 @@ function PortalEventsTab({stu,state,upd,user,isMobile}) {
             // Phone: the grid only shows dots, so list the month in full here.
             const mStart=calMonth+"-01";
             const mEnd=calMonth+"-31";
-            const evs=allItems.filter(e=>e.endDate>=mStart&&e.startDate<=mEnd)
-              .map(e=>({date:e.startDate,kind:"event",name:e.name,sub:e.location||"",id:e.id}));
+            // The grid above also dots breaks and cancellations, so list them
+            // here too — every dot needs a row to explain it.
+            const evs=calendarItems(events,state.specialDays)
+              .filter(e=>e.endDate>=mStart&&e.startDate<=mEnd)
+              .map(e=>({date:e.startDate,end:e.endDate,kind:e.eventId?"event":"special",
+                name:e.name,sub:e.location||"",id:e.eventId,color:calDotEvent(e)}));
             const dues=Object.entries(dueDateMap||{}).filter(([d])=>d>=mStart&&d<=mEnd)
               .map(([d,items])=>({date:d,kind:"due",name:items.length===1?items[0].assignName:items.length+" assignments due",
-                sub:items.length===1?items[0].subjectName:items.map(i=>i.subjectName).join(", "),items:items}));
+                sub:items.length===1?items[0].subjectName:items.map(i=>i.subjectName).join(", "),items:items,
+                color:calDotDue()}));
             const qs=(quarterItems||[]).filter(q=>(q.startDate>=mStart&&q.startDate<=mEnd)||(q.endDate>=mStart&&q.endDate<=mEnd))
-              .map(q=>({date:q.qType==="end"?q.endDate:q.startDate,kind:"quarter",name:q.name,sub:""}));
+              .map(q=>({date:q.qType==="end"?q.endDate:q.startDate,kind:"quarter",name:q.name,sub:"",color:calDotQuarter(q)}));
             const rows=[...evs,...(showAssignments?dues:[]),...qs].sort((a,b)=>a.date>b.date?1:-1);
             return (
               <div style={{marginTop:14,borderTop:"1px solid var(--br)",paddingTop:12}}>
@@ -5482,12 +5530,13 @@ function PortalEventsTab({stu,state,upd,user,isMobile}) {
                   {rows.map((r,i)=>(
                     <div key={i} onClick={()=>{ if(r.kind==="event") setViewingEvent(r.id); else if(r.kind==="due") setViewingDue({date:r.date,items:r.items}); }}
                       style={{display:"flex",gap:10,alignItems:"flex-start",padding:"9px 10px",borderRadius:8,background:"var(--bg)",
-                        cursor:r.kind==="quarter"?"default":"pointer"}}>
-                      <span style={{width:8,height:8,borderRadius:"50%",marginTop:5,flexShrink:0,
-                        background:r.kind==="event"?"var(--acc)":r.kind==="quarter"?"var(--grn)":"var(--pur)"}}/>
+                        cursor:r.kind==="event"||r.kind==="due"?"pointer":"default"}}>
+                      <span style={{width:8,height:8,borderRadius:"50%",marginTop:5,flexShrink:0,background:r.color}}/>
                       <div style={{minWidth:0,flex:1}}>
                         <div style={{fontSize:13,fontWeight:600}}>{r.name}</div>
-                        <div style={{fontSize:11,color:"var(--t3)",marginTop:1}}>{fmt(r.date)}{r.sub?" · "+r.sub:""}</div>
+                        <div style={{fontSize:11,color:"var(--t3)",marginTop:1}}>
+                          {fmt(r.date)}{r.end&&r.end!==r.date?" – "+fmt(r.end):""}{r.sub?" · "+r.sub:""}
+                        </div>
                       </div>
                     </div>
                   ))}

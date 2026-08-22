@@ -3808,7 +3808,7 @@ function buildDemoState() {
   }, {
     id: "ev3",
     name: "Thanksgiving Break",
-    location: "—",
+    location: "",
     startDate: "2024-11-25",
     endDate: "2024-11-29",
     description: "No classes. Enjoy the holiday!",
@@ -9051,6 +9051,57 @@ function buildQuarterItems(sy, finalizedQuarters) {
   });
   return items;
 }
+const CAL_DOT = {
+  event: "var(--acc)",
+  break: "var(--acc)",
+  cancel: "var(--red)",
+  delay: "var(--yel)",
+  qstart: "var(--grn)",
+  qend: "var(--yel)",
+  due: "var(--pur)"
+};
+function calDotEvent(e) {
+  if (e._type !== "special") return CAL_DOT.event;
+  return CAL_DOT[e.spType] || CAL_DOT.event;
+}
+function calDotDue() {
+  return CAL_DOT.due;
+}
+function calDotQuarter(q) {
+  return q.qType === "end" ? CAL_DOT.qend : CAL_DOT.qstart;
+}
+function calendarItems(events, specialDays) {
+  const key = e => String(e.name || "").trim().toLowerCase() + "|" + e.startDate + "|" + e.endDate;
+  const specials = new Map((specialDays || []).filter(d => d.startDate && d.endDate).map(d => {
+    const s = {
+      id: d.id,
+      _type: "special",
+      spType: d.type,
+      startDate: d.startDate,
+      endDate: d.endDate,
+      name: d.note || (d.type === "break" ? "Break" : d.type === "cancel" ? "No school" : d.type === "delay" ? "Late start" : "Special day")
+    };
+    return [key(s), s];
+  }));
+  const out = [];
+  (events || []).forEach(e => {
+    const dup = specials.get(key(e));
+    if (dup) {
+      specials.delete(key(e));
+      out.push({
+        ...dup,
+        eventId: e.id,
+        location: e.location
+      });
+    } else out.push({
+      ...e,
+      _type: "event",
+      eventId: e.id
+    });
+  });
+  specials.forEach(s => out.push(s));
+  return out;
+}
 function EventCalendarGrid({
   calMonth,
   state,
@@ -9069,17 +9120,7 @@ function EventCalendarGrid({
   const [y, m] = calMonth.split("-").map(Number);
   const firstDay = new Date(y, m - 1, 1).getDay();
   const daysInMonth = new Date(y, m, 0).getDate();
-  const allItems = [...(state.events || []).map(e => ({
-    ...e,
-    _type: "event"
-  })), ...(state.specialDays || []).filter(d => d.startDate && d.endDate).map(d => ({
-    id: d.id,
-    name: d.note || (d.type === "break" ? "Break" : "Special"),
-    startDate: d.startDate,
-    endDate: d.endDate,
-    _type: "special",
-    spType: d.type
-  }))];
+  const allItems = calendarItems(state.events, state.specialDays);
   const cells = [];
   for (let i = 0; i < firstDay; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) cells.push(d);
@@ -9149,13 +9190,13 @@ function EventCalendarGrid({
       const qm = (quarterItems || []).filter(q => q.startDate === ds || q.endDate === ds);
       const dots = [...qm.map(q => ({
         k: "q" + q.id,
-        c: q.qType === "end" ? "var(--yel)" : "var(--grn)"
+        c: calDotQuarter(q)
       })), ...dayItems.map(e => ({
         k: "e" + e.id,
-        c: e._type === "special" ? e.spType === "cancel" ? "var(--red)" : e.spType === "delay" ? "var(--yel)" : "var(--acc)" : "var(--acc)"
+        c: calDotEvent(e)
       })), ...dueItems.map((x, ix) => ({
         k: "d" + ix,
-        c: x.category === "test" ? "var(--pur)" : "var(--t3)"
+        c: calDotDue()
       }))];
       if (!dots.length) return null;
       return React.createElement("div", {
@@ -9241,12 +9282,12 @@ function EventCalendarGrid({
         marginBottom: 1,
         background: e._type === "special" ? e.spType === "break" ? "rgba(76,175,80,0.2)" : e.spType === "cancel" ? "rgba(248,113,113,0.2)" : "rgba(251,191,36,0.2)" : "rgba(76,175,80,0.15)",
         color: e._type === "special" ? e.spType === "break" ? "var(--acc)" : e.spType === "cancel" ? "var(--red)" : "var(--yel)" : "var(--t1)",
-        cursor: "pointer",
+        cursor: e.eventId ? "pointer" : "default",
         whiteSpace: "nowrap",
         overflow: "hidden",
         textOverflow: "ellipsis"
       },
-      onClick: () => e._type === "event" && setViewing(e.id),
+      onClick: () => e.eventId && setViewing(e.eventId),
       title: e.name
     }, e.name)), !compact && dueItems.length > 0 && (() => {
       const hw = dueItems.filter(x => x.category !== "test");
@@ -14653,25 +14694,29 @@ function PortalEventsTab({
   }), isMobile && (() => {
     const mStart = calMonth + "-01";
     const mEnd = calMonth + "-31";
-    const evs = allItems.filter(e => e.endDate >= mStart && e.startDate <= mEnd).map(e => ({
+    const evs = calendarItems(events, state.specialDays).filter(e => e.endDate >= mStart && e.startDate <= mEnd).map(e => ({
       date: e.startDate,
-      kind: "event",
+      end: e.endDate,
+      kind: e.eventId ? "event" : "special",
       name: e.name,
       sub: e.location || "",
-      id: e.id
+      id: e.eventId,
+      color: calDotEvent(e)
     }));
     const dues = Object.entries(dueDateMap || {}).filter(([d]) => d >= mStart && d <= mEnd).map(([d, items]) => ({
       date: d,
       kind: "due",
       name: items.length === 1 ? items[0].assignName : items.length + " assignments due",
       sub: items.length === 1 ? items[0].subjectName : items.map(i => i.subjectName).join(", "),
-      items: items
+      items: items,
+      color: calDotDue()
     }));
     const qs = (quarterItems || []).filter(q => q.startDate >= mStart && q.startDate <= mEnd || q.endDate >= mStart && q.endDate <= mEnd).map(q => ({
       date: q.qType === "end" ? q.endDate : q.startDate,
       kind: "quarter",
       name: q.name,
-      sub: ""
+      sub: "",
+      color: calDotQuarter(q)
     }));
     const rows = [...evs, ...(showAssignments ? dues : []), ...qs].sort((a, b) => a.date > b.date ? 1 : -1);
     return React.createElement("div", {
@@ -14708,7 +14753,7 @@ function PortalEventsTab({
         padding: "9px 10px",
         borderRadius: 8,
         background: "var(--bg)",
-        cursor: r.kind === "quarter" ? "default" : "pointer"
+        cursor: r.kind === "event" || r.kind === "due" ? "pointer" : "default"
       }
     }, React.createElement("span", {
       style: {
@@ -14717,7 +14762,7 @@ function PortalEventsTab({
         borderRadius: "50%",
         marginTop: 5,
         flexShrink: 0,
-        background: r.kind === "event" ? "var(--acc)" : r.kind === "quarter" ? "var(--grn)" : "var(--pur)"
+        background: r.color
       }
     }), React.createElement("div", {
       style: {
@@ -14735,7 +14780,7 @@ function PortalEventsTab({
         color: "var(--t3)",
         marginTop: 1
       }
-    }, fmt(r.date), r.sub ? " · " + r.sub : ""))))));
+    }, fmt(r.date), r.end && r.end !== r.date ? " – " + fmt(r.end) : "", r.sub ? " · " + r.sub : ""))))));
   })())), React.createElement("div", null, React.createElement("div", {
     className: "card",
     style: {
