@@ -1823,10 +1823,23 @@ function Students({state,upd,isMobile,onCreateParent}) {
           </div>
           {curSub&&<div style={{background:"var(--bg)",borderRadius:8,padding:14,border:"1px solid var(--br)"}}>
             <div style={{fontSize:12,fontWeight:600,marginBottom:10}}>{curSub.emoji} {curSub.name} — Assignments</div>
-            <div style={{display:"flex",gap:7,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
-              <input className="ins" placeholder="Assignment name" value={af.name} onChange={e=>setAf(f=>({...f,name:e.target.value}))}/>
-              {!isMDN(sel.gradeLevel,state.sy?.mdnCutoff)&&<input className="ins" type="number" placeholder="Max pts" value={af.maxScore} onChange={e=>setAf(f=>({...f,maxScore:e.target.value}))} style={{width:72}}/>}
-              <input className="ins" type="date" value={af.date} onChange={e=>setAf(f=>({...f,date:e.target.value}))}/>
+            {/* Points and date arrive already filled in, so their placeholders
+                would never be seen — these need labels above them, not inside. */}
+            <div style={{display:"flex",gap:7,marginBottom:10,flexWrap:"wrap",alignItems:"flex-end"}}>
+              <div style={{flex:1,minWidth:140}}>
+                <div style={{fontSize:10,fontWeight:600,color:"var(--t2)",marginBottom:3}}>Assignment name</div>
+                <input className="ins" style={{width:"100%"}} placeholder="e.g. Chapter 3 Worksheet" value={af.name}
+                  onChange={e=>setAf(f=>({...f,name:e.target.value}))} onKeyDown={e=>e.key==="Enter"&&addAssign()}/>
+              </div>
+              {!isMDN(sel.gradeLevel,state.sy?.mdnCutoff)&&<div>
+                <div style={{fontSize:10,fontWeight:600,color:"var(--t2)",marginBottom:3}}>Points possible</div>
+                <input className="ins" type="number" min="1" value={af.maxScore} aria-label="Points possible"
+                  onChange={e=>setAf(f=>({...f,maxScore:e.target.value}))} style={{width:82}}/>
+              </div>}
+              <div>
+                <div style={{fontSize:10,fontWeight:600,color:"var(--t2)",marginBottom:3}}>Assigned</div>
+                <input className="ins" type="date" value={af.date} aria-label="Date assigned" onChange={e=>setAf(f=>({...f,date:e.target.value}))}/>
+              </div>
               <button className="bs p" onClick={addAssign}>Add</button>
             </div>
             <div style={{display:"flex",flexDirection:"column",gap:5}}>
@@ -3813,13 +3826,23 @@ function Reports({state}) {
               ))}
             </div>
           </div>}
+          {/* These carry values from the moment they appear, so a placeholder
+              would never be seen. Label the columns instead. */}
           {periods.map((p,i)=>(
-            <div key={p.id} style={{display:"flex",alignItems:"center",gap:7,marginBottom:8,flexWrap:"wrap"}}>
-              <input className="ins" placeholder="Label" value={p.label} onChange={e=>updP(p.id,"label",e.target.value)} style={{width:90}}/>
-              <input className="ins" type="date" value={p.startDate} onChange={e=>updP(p.id,"startDate",e.target.value)}/>
-              <span style={{fontSize:11,color:"var(--t3)"}}>to</span>
-              <input className="ins" type="date" value={p.endDate} onChange={e=>updP(p.id,"endDate",e.target.value)}/>
-              {periods.length>1&&<button className="bx" style={{color:"var(--red)"}} onClick={()=>setPeriods(p2=>p2.filter(x=>x.id!==p.id))}>x</button>}
+            <div key={p.id} style={{display:"flex",alignItems:"flex-end",gap:7,marginBottom:8,flexWrap:"wrap"}}>
+              <div>
+                {i===0&&<div style={{fontSize:10,fontWeight:600,color:"var(--t2)",marginBottom:3}}>Name</div>}
+                <input className="ins" value={p.label} aria-label="Period name" onChange={e=>updP(p.id,"label",e.target.value)} style={{width:90}}/>
+              </div>
+              <div>
+                {i===0&&<div style={{fontSize:10,fontWeight:600,color:"var(--t2)",marginBottom:3}}>From</div>}
+                <input className="ins" type="date" value={p.startDate} aria-label="Period start date" onChange={e=>updP(p.id,"startDate",e.target.value)}/>
+              </div>
+              <div>
+                {i===0&&<div style={{fontSize:10,fontWeight:600,color:"var(--t2)",marginBottom:3}}>To</div>}
+                <input className="ins" type="date" value={p.endDate} aria-label="Period end date" onChange={e=>updP(p.id,"endDate",e.target.value)}/>
+              </div>
+              {periods.length>1&&<button className="bx" style={{color:"var(--red)",marginBottom:2}} title="Remove this period" onClick={()=>setPeriods(p2=>p2.filter(x=>x.id!==p.id))}>x</button>}
             </div>
           ))}
           <button className="bs" style={{marginTop:4}} onClick={()=>setPeriods(p=>[...p,{id:uid(),label:"Period "+(p.length+1),startDate:"",endDate:""}])}>+ Add Period</button>
@@ -4673,11 +4696,17 @@ function Settings({state,upd}) {
     return txt;
   };
 
+  // Typed on a phone keyboard, so accept stray spaces and lower case — the
+  // point is that the teacher wrote the word, not that they found caps lock.
+  const bumpReady=bumpConfirm.trim().toUpperCase()==="CONFIRM";
   const bumpGrades=()=>{
-    if(bumpConfirm!=="CONFIRM") return;
-    // If any students are excluded, ask about repeating before proceeding
+    if(!bumpReady) return;
+    // Promotion runs as a sequence of modals. Each step has to close the one
+    // before it: they are siblings with the same stacking order, so leaving
+    // this one open would simply cover the next and look like a dead button.
     const excludedList=state.students.filter(s=>excluded[s.id]);
     if(excludedList.length&&!showRepeatPrompt){
+      setShowBump(false);
       setShowRepeatPrompt(true);
       return;
     }
@@ -4686,11 +4715,16 @@ function Settings({state,upd}) {
   // Suggest rolling the existing dates forward by one year.
   const plusYear=(d)=>{if(!d)return "";const dt=new Date(d+"T12:00:00");dt.setFullYear(dt.getFullYear()+1);return dt.toISOString().slice(0,10);};
   const openYearPrompt=()=>{
+    setShowBump(false);
     setShowRepeatPrompt(false);
     setYearForm({startDate:plusYear(state.sy?.startDate),endDate:plusYear(state.sy?.endDate)});
     setShowYearPrompt(true);
   };
-  const doBump=(newYear)=>{
+  const doBump=(arg)=>{
+    // Only a real {startDate,endDate} counts. Wiring this straight to an
+    // onClick would otherwise hand it a MouseEvent, which is truthy and would
+    // record the new year's dates as "already set" when they never were.
+    const newYear=(arg&&arg.startDate&&arg.endDate)?arg:null;
     const mdnCutoff=sy.mdnCutoff||"5th Grade";
     const schoolYear=(state.sy?.startDate?.slice(0,4)||"")+"–"+(state.sy?.endDate?.slice(0,4)||"");
     const teacher=state.users?.find(u=>u.role==="teacher");
@@ -4883,9 +4917,15 @@ function Settings({state,upd}) {
         </div>
         {yearForm.startDate&&yearForm.endDate&&yearForm.endDate<=yearForm.startDate&&<div style={{color:"var(--red)",fontSize:12,marginTop:8}}>End date must be after the start date.</div>}
         <div className="mda">
+          <button className="bs" onClick={()=>{setShowYearPrompt(false);setShowBump(true);}}>← Back</button>
           <button className="bg" onClick={()=>doBump(null)}>Skip for now</button>
-          <button className="bp" style={{opacity:(yearForm.startDate&&yearForm.endDate&&yearForm.endDate>yearForm.startDate)?1:0.4}}
-            onClick={()=>{if(!yearForm.startDate||!yearForm.endDate||yearForm.endDate<=yearForm.startDate)return;doBump(yearForm);}}>Save Dates &amp; Promote</button>
+          {(()=>{
+            const datesOk=yearForm.startDate&&yearForm.endDate&&yearForm.endDate>yearForm.startDate;
+            return <button className="bp" disabled={!datesOk}
+              style={{opacity:datesOk?1:0.4,cursor:datesOk?"pointer":"not-allowed"}}
+              title={datesOk?"":"Fill in both dates first"}
+              onClick={()=>{if(!datesOk)return;doBump(yearForm);}}>Save Dates &amp; Promote</button>;
+          })()}
         </div>
       </div></div>}
       {/* ── BUMP MODAL ── */}
@@ -4903,9 +4943,11 @@ function Settings({state,upd}) {
         ))}
         <div style={{display:"flex",gap:8,marginTop:14,flexWrap:"wrap"}}>
           <button className="bp" onClick={()=>{setRepeating(r=>{const n={};state.students.filter(s=>excluded[s.id]).forEach(s=>{n[s.id]=true;});return n;});}}>Yes — All Repeat</button>
-          <button className="bg" onClick={()=>{setRepeating({});doBump();}}>No — None Repeat</button>
-          <button className="bs a" onClick={doBump}>Confirm Selected</button>
-          <button className="bs" onClick={()=>setShowRepeatPrompt(false)}>Cancel</button>
+          {/* Both of these continue to the year-dates step rather than promoting
+              on the spot — held-back students shouldn't skip being asked. */}
+          <button className="bg" onClick={()=>{setRepeating({});openYearPrompt();}}>No — None Repeat</button>
+          <button className="bs a" onClick={()=>openYearPrompt()}>Confirm Selected</button>
+          <button className="bs" onClick={()=>{setShowRepeatPrompt(false);setShowBump(true);}}>← Back</button>
         </div>
       </div></div>}
       {showBump&&<div className="mo"><div className="md" style={{maxWidth:580}}>
@@ -4935,12 +4977,25 @@ function Settings({state,upd}) {
           })}
         </div>
         <div style={{marginBottom:14}}>
-          <label style={{fontSize:11,color:"var(--t2)"}}>Type CONFIRM to proceed:</label>
-          <input className="inp" style={{marginTop:6}} value={bumpConfirm} onChange={e=>setBumpConfirm(e.target.value)} placeholder="CONFIRM"/>
+          <label style={{fontSize:11,color:"var(--t2)",fontWeight:600}}>
+            This can't be undone. Type <strong>CONFIRM</strong> in the box to unlock the button:
+          </label>
+          {/* No placeholder here on purpose: it used to be the word "CONFIRM"
+              itself, which reads as an already-filled box and made the button
+              below look broken. */}
+          <input className="inp" style={{marginTop:6}} value={bumpConfirm} aria-label="Type CONFIRM to proceed"
+            autoCapitalize="characters" autoCorrect="off" spellCheck={false}
+            onChange={e=>setBumpConfirm(e.target.value)}
+            onKeyDown={e=>{if(e.key==="Enter"&&bumpReady) bumpGrades();}}/>
+          {!bumpReady&&<div style={{fontSize:10,color:"var(--t2)",marginTop:5}}>
+            {bumpConfirm.trim()?"That doesn't match — type CONFIRM exactly.":"Promote Students stays locked until this box says CONFIRM."}
+          </div>}
         </div>
         <div className="mda">
           <button className="bg" onClick={()=>{setShowBump(false);setBumpConfirm("");setExcluded({});}}>Cancel</button>
-          <button className="bp" style={{opacity:bumpConfirm==="CONFIRM"?1:0.4}} onClick={bumpGrades}>Promote Students</button>
+          <button className="bp" disabled={!bumpReady} title={bumpReady?"":"Type CONFIRM above first"}
+            style={{opacity:bumpReady?1:0.4,cursor:bumpReady?"pointer":"not-allowed"}}
+            onClick={bumpGrades}>Promote Students</button>
         </div>
       </div></div>}
 

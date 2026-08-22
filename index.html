@@ -6029,37 +6029,69 @@ function Students({
       gap: 7,
       marginBottom: 10,
       flexWrap: "wrap",
-      alignItems: "center"
+      alignItems: "flex-end"
     }
-  }, React.createElement("input", {
+  }, React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 140
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 600,
+      color: "var(--t2)",
+      marginBottom: 3
+    }
+  }, "Assignment name"), React.createElement("input", {
     className: "ins",
-    placeholder: "Assignment name",
+    style: {
+      width: "100%"
+    },
+    placeholder: "e.g. Chapter 3 Worksheet",
     value: af.name,
     onChange: e => setAf(f => ({
       ...f,
       name: e.target.value
-    }))
-  }), !isMDN(sel.gradeLevel, state.sy?.mdnCutoff) && React.createElement("input", {
+    })),
+    onKeyDown: e => e.key === "Enter" && addAssign()
+  })), !isMDN(sel.gradeLevel, state.sy?.mdnCutoff) && React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 600,
+      color: "var(--t2)",
+      marginBottom: 3
+    }
+  }, "Points possible"), React.createElement("input", {
     className: "ins",
     type: "number",
-    placeholder: "Max pts",
+    min: "1",
     value: af.maxScore,
+    "aria-label": "Points possible",
     onChange: e => setAf(f => ({
       ...f,
       maxScore: e.target.value
     })),
     style: {
-      width: 72
+      width: 82
     }
-  }), React.createElement("input", {
+  })), React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 600,
+      color: "var(--t2)",
+      marginBottom: 3
+    }
+  }, "Assigned"), React.createElement("input", {
     className: "ins",
     type: "date",
     value: af.date,
+    "aria-label": "Date assigned",
     onChange: e => setAf(f => ({
       ...f,
       date: e.target.value
     }))
-  }), React.createElement("button", {
+  })), React.createElement("button", {
     className: "bs p",
     onClick: addAssign
   }, "Add")), React.createElement("div", {
@@ -10571,39 +10603,59 @@ function Reports({
     key: p.id,
     style: {
       display: "flex",
-      alignItems: "center",
+      alignItems: "flex-end",
       gap: 7,
       marginBottom: 8,
       flexWrap: "wrap"
     }
-  }, React.createElement("input", {
+  }, React.createElement("div", null, i === 0 && React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 600,
+      color: "var(--t2)",
+      marginBottom: 3
+    }
+  }, "Name"), React.createElement("input", {
     className: "ins",
-    placeholder: "Label",
     value: p.label,
+    "aria-label": "Period name",
     onChange: e => updP(p.id, "label", e.target.value),
     style: {
       width: 90
     }
-  }), React.createElement("input", {
+  })), React.createElement("div", null, i === 0 && React.createElement("div", {
+    style: {
+      fontSize: 10,
+      fontWeight: 600,
+      color: "var(--t2)",
+      marginBottom: 3
+    }
+  }, "From"), React.createElement("input", {
     className: "ins",
     type: "date",
     value: p.startDate,
+    "aria-label": "Period start date",
     onChange: e => updP(p.id, "startDate", e.target.value)
-  }), React.createElement("span", {
+  })), React.createElement("div", null, i === 0 && React.createElement("div", {
     style: {
-      fontSize: 11,
-      color: "var(--t3)"
+      fontSize: 10,
+      fontWeight: 600,
+      color: "var(--t2)",
+      marginBottom: 3
     }
-  }, "to"), React.createElement("input", {
+  }, "To"), React.createElement("input", {
     className: "ins",
     type: "date",
     value: p.endDate,
+    "aria-label": "Period end date",
     onChange: e => updP(p.id, "endDate", e.target.value)
-  }), periods.length > 1 && React.createElement("button", {
+  })), periods.length > 1 && React.createElement("button", {
     className: "bx",
     style: {
-      color: "var(--red)"
+      color: "var(--red)",
+      marginBottom: 2
     },
+    title: "Remove this period",
     onClick: () => setPeriods(p2 => p2.filter(x => x.id !== p.id))
   }, "x"))), React.createElement("button", {
     className: "bs",
@@ -12487,10 +12539,12 @@ function Settings({
     if (isHSGrade) txt += "Term GPA: " + (count ? (totalPts / count).toFixed(2) : "—") + nl;else txt += "(GPA calculations apply to grades 9–12 only)" + nl;
     return txt;
   };
+  const bumpReady = bumpConfirm.trim().toUpperCase() === "CONFIRM";
   const bumpGrades = () => {
-    if (bumpConfirm !== "CONFIRM") return;
+    if (!bumpReady) return;
     const excludedList = state.students.filter(s => excluded[s.id]);
     if (excludedList.length && !showRepeatPrompt) {
+      setShowBump(false);
       setShowRepeatPrompt(true);
       return;
     }
@@ -12503,6 +12557,7 @@ function Settings({
     return dt.toISOString().slice(0, 10);
   };
   const openYearPrompt = () => {
+    setShowBump(false);
     setShowRepeatPrompt(false);
     setYearForm({
       startDate: plusYear(state.sy?.startDate),
@@ -12510,7 +12565,8 @@ function Settings({
     });
     setShowYearPrompt(true);
   };
-  const doBump = newYear => {
+  const doBump = arg => {
+    const newYear = arg && arg.startDate && arg.endDate ? arg : null;
     const mdnCutoff = sy.mdnCutoff || "5th Grade";
     const schoolYear = (state.sy?.startDate?.slice(0, 4) || "") + "–" + (state.sy?.endDate?.slice(0, 4) || "");
     const teacher = state.users?.find(u => u.role === "teacher");
@@ -12870,18 +12926,30 @@ function Settings({
   }, "End date must be after the start date."), React.createElement("div", {
     className: "mda"
   }, React.createElement("button", {
+    className: "bs",
+    onClick: () => {
+      setShowYearPrompt(false);
+      setShowBump(true);
+    }
+  }, "\u2190 Back"), React.createElement("button", {
     className: "bg",
     onClick: () => doBump(null)
-  }, "Skip for now"), React.createElement("button", {
-    className: "bp",
-    style: {
-      opacity: yearForm.startDate && yearForm.endDate && yearForm.endDate > yearForm.startDate ? 1 : 0.4
-    },
-    onClick: () => {
-      if (!yearForm.startDate || !yearForm.endDate || yearForm.endDate <= yearForm.startDate) return;
-      doBump(yearForm);
-    }
-  }, "Save Dates & Promote")))), showRepeatPrompt && React.createElement("div", {
+  }, "Skip for now"), (() => {
+    const datesOk = yearForm.startDate && yearForm.endDate && yearForm.endDate > yearForm.startDate;
+    return React.createElement("button", {
+      className: "bp",
+      disabled: !datesOk,
+      style: {
+        opacity: datesOk ? 1 : 0.4,
+        cursor: datesOk ? "pointer" : "not-allowed"
+      },
+      title: datesOk ? "" : "Fill in both dates first",
+      onClick: () => {
+        if (!datesOk) return;
+        doBump(yearForm);
+      }
+    }, "Save Dates & Promote");
+  })()))), showRepeatPrompt && React.createElement("div", {
     className: "mo"
   }, React.createElement("div", {
     className: "md",
@@ -12945,15 +13013,18 @@ function Settings({
     className: "bg",
     onClick: () => {
       setRepeating({});
-      doBump();
+      openYearPrompt();
     }
   }, "No \u2014 None Repeat"), React.createElement("button", {
     className: "bs a",
-    onClick: doBump
+    onClick: () => openYearPrompt()
   }, "Confirm Selected"), React.createElement("button", {
     className: "bs",
-    onClick: () => setShowRepeatPrompt(false)
-  }, "Cancel")))), showBump && React.createElement("div", {
+    onClick: () => {
+      setShowRepeatPrompt(false);
+      setShowBump(true);
+    }
+  }, "\u2190 Back")))), showBump && React.createElement("div", {
     className: "mo"
   }, React.createElement("div", {
     className: "md",
@@ -13035,17 +13106,30 @@ function Settings({
   }, React.createElement("label", {
     style: {
       fontSize: 11,
-      color: "var(--t2)"
+      color: "var(--t2)",
+      fontWeight: 600
     }
-  }, "Type CONFIRM to proceed:"), React.createElement("input", {
+  }, "This can't be undone. Type ", React.createElement("strong", null, "CONFIRM"), " in the box to unlock the button:"), React.createElement("input", {
     className: "inp",
     style: {
       marginTop: 6
     },
     value: bumpConfirm,
+    "aria-label": "Type CONFIRM to proceed",
+    autoCapitalize: "characters",
+    autoCorrect: "off",
+    spellCheck: false,
     onChange: e => setBumpConfirm(e.target.value),
-    placeholder: "CONFIRM"
-  })), React.createElement("div", {
+    onKeyDown: e => {
+      if (e.key === "Enter" && bumpReady) bumpGrades();
+    }
+  }), !bumpReady && React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "var(--t2)",
+      marginTop: 5
+    }
+  }, bumpConfirm.trim() ? "That doesn't match — type CONFIRM exactly." : "Promote Students stays locked until this box says CONFIRM.")), React.createElement("div", {
     className: "mda"
   }, React.createElement("button", {
     className: "bg",
@@ -13056,8 +13140,11 @@ function Settings({
     }
   }, "Cancel"), React.createElement("button", {
     className: "bp",
+    disabled: !bumpReady,
+    title: bumpReady ? "" : "Type CONFIRM above first",
     style: {
-      opacity: bumpConfirm === "CONFIRM" ? 1 : 0.4
+      opacity: bumpReady ? 1 : 0.4,
+      cursor: bumpReady ? "pointer" : "not-allowed"
     },
     onClick: bumpGrades
   }, "Promote Students")))), React.createElement("div", {
