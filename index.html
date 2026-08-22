@@ -351,10 +351,18 @@ var _appUser=null, _appState=null;
 // reports back, so the login form never appears (and gets typed into) only to
 // be replaced moments later by an auto-restored session.
 var _authResolved=false;
+// The one way the login form is put on screen. It resets the form as well as
+// revealing it: a successful sign-in leaves the button reading "Signing in…"
+// (the app takes over the page at that point and never changes it back), so a
+// screen shown again — after a sign-out, or the idle timeout — would otherwise
+// claim to be signing in before anyone had typed anything.
 function _showLoginScreen(){
   _authResolved=true;
+  _loggingIn=false;
   var l=document.getElementById("loading-app"); if(l) l.style.display="none";
+  var a=document.getElementById("app-root"); if(a) a.style.display="none";
   var s=document.getElementById("login-screen"); if(s) s.style.display="flex";
+  var b=document.querySelector(".login-btn"); if(b) b.textContent="Sign In";
 }
 // If Firebase is slow or unreachable, fall back to the form rather than spin forever.
 setTimeout(function(){ if(!_authResolved) _showLoginScreen(); },6000);
@@ -1131,11 +1139,9 @@ function doLogout(){
   _clearListeners();
   _fannedOnce=false; _snapStarted=false; _lastResponses=null;
   window._auth.signOut().then(function(){
-    document.getElementById("app-root").style.display="none";
-    document.getElementById("loading-app").style.display="none";
-    document.getElementById("login-screen").style.display="flex";
     document.getElementById("login-email").value="";
     document.getElementById("login-pw").value="";
+    _showLoginScreen();
   });
 }
 
