@@ -305,7 +305,13 @@ body{background:var(--bg);color:var(--t1);min-height:100vh;}
 window.onerror = function(msg, src, line, col, err) {
   var el = document.getElementById("loading-app");
   if(el && el.style.display !== "none") {
-    el.innerHTML = '<div style="color:#f87171;padding:20px;font-family:monospace;font-size:12px;max-width:600px;text-align:left"><strong>Runtime Error:</strong><br>' + msg + '<br><br>Line: ' + line + '<br>Source: ' + (src||"").split("/").pop() + '</div>';
+    try{ console.error("[Empower Iowa]", msg, (src||"")+":"+line); }catch(_){}
+    el.innerHTML = '<div style="text-align:center;padding:0 24px;max-width:420px">'
+      + '<div style="font-size:34px;margin-bottom:10px">&#9888;&#65039;</div>'
+      + '<div style="color:#e2e8f0;font-size:16px;font-weight:700;margin-bottom:8px">Something went wrong while starting the app.</div>'
+      + '<div style="color:#94a3b8;font-size:13px;line-height:1.5;margin-bottom:18px">Please check your internet connection and try again. If this keeps happening, contact your administrator.</div>'
+      + '<button onclick="window.location.reload()" style="background:#4caf50;border:none;border-radius:7px;padding:9px 18px;color:#0a0e1a;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Try Again</button>'
+      + '<div style="color:#475569;font-size:10px;margin-top:16px;word-break:break-word">' + msg + '</div></div>';
     el.style.display = "flex";
   }
   return false;
@@ -434,7 +440,7 @@ window._auth.onAuthStateChanged(function(user){
   // Hide login, show loading
   document.getElementById("login-screen").style.display="none";
   document.getElementById("loading-app").style.display="flex";
-  showStatus("Signing in...");
+  showStatus("Signing in…");
 
   // Determine the user's role from their login record. Staff access (admin or
   // teacher) requires EITHER a bootstrap admin email OR a user record whose role
@@ -477,6 +483,24 @@ window._auth.onAuthStateChanged(function(user){
 function showStatus(msg, color) {
   document.getElementById("loading-app").innerHTML =
     '<div class="spinner"></div><div style="color:' + (color||'#4caf50') + ';text-align:center;padding:0 20px">' + msg + '</div>';
+}
+
+// Friendly failure screen. The technical cause is written to the browser console
+// (and shown small and muted) so it can still be reported, without putting stack
+// details in front of a teacher.
+function showLoadError(msg, detail){
+  try{ if(detail) console.error("[Empower Iowa]", detail); }catch(e){}
+  var el=document.getElementById("loading-app");
+  if(!el) return;
+  el.style.display="flex";
+  el.innerHTML =
+    '<div style="text-align:center;padding:0 24px;max-width:420px">'
+    + '<div style="font-size:34px;margin-bottom:10px">&#9888;&#65039;</div>'
+    + '<div style="color:#e2e8f0;font-size:16px;font-weight:700;margin-bottom:8px">' + msg + '</div>'
+    + '<div style="color:#94a3b8;font-size:13px;line-height:1.5;margin-bottom:18px">Please check your internet connection and try again. If this keeps happening, contact your administrator.</div>'
+    + '<button onclick="window.location.reload()" style="background:#4caf50;border:none;border-radius:7px;padding:9px 18px;color:#0a0e1a;font-weight:700;font-size:13px;cursor:pointer;font-family:inherit">Try Again</button>'
+    + (detail?('<div style="color:#475569;font-size:10px;margin-top:16px;word-break:break-word">' + detail + '</div>'):'')
+    + '</div>';
 }
 
 function showNoAccess(detail){
@@ -587,14 +611,14 @@ function ensureResponsesDocs(state){
 
 // ─── Teacher load path: subscribes to the master state document ─────────────
 function loadTeacher(user){
-  showStatus("Loading school data...");
+  showStatus("Loading school data…");
   var stateRef=_school().collection("state").doc("main");
 
   _unsubs.push(stateRef.onSnapshot(function(snap){
     if(snap.exists){
       _appState=snap.data();
     } else {
-      showStatus("First-time setup, initializing...");
+      showStatus("Setting up your school…");
       _appState={
         users:[{id:user.uid,role:"teacher",name:_appUser.name,email:_appUser.email,username:_appUser.email}],
         students:[],subjects:{},attendance:{},behavior:{},sw:{},
@@ -606,7 +630,7 @@ function loadTeacher(user){
           pinnedNav:["dashboard","students","gradebook","attendance"]}
       };
       stateRef.set(_appState).catch(function(e){
-        showStatus("ERROR writing data: " + e.message + " (code: " + e.code + ")", "#f87171");
+        showLoadError("We couldn\u2019t save your school data.", (e&&e.code?e.code+": ":"")+(e&&e.message||""));
       });
     }
     window._appState = _appState;
@@ -618,7 +642,7 @@ function loadTeacher(user){
     // Start the daily-snapshot scheduler once (captures today's snapshot if missing).
     if(!_snapStarted && _appState){ _snapStarted=true; scheduleDailySnapshot(); }
   }, function(err){
-    showStatus("ERROR reading data: " + err.message + " (code: " + err.code + ")", "#f87171");
+    showLoadError("We couldn\u2019t load your school data.", (err&&err.code?err.code+": ":"")+(err&&err.message||""));
   }));
 
   // Track all accounts (for the Accounts screen) and the parent/student ->
@@ -658,7 +682,7 @@ function loadTeacher(user){
 
 // ─── Parent / student load path: reads ONLY their own portal documents ──────
 function loadPortal(user){
-  showStatus("Loading your student portal...");
+  showStatus("Loading your student portal…");
   var sids=(_appUser.studentIds||[]);
   var portalDocs={}, responses={};
   function rerender(){
@@ -1079,40 +1103,40 @@ setInterval(function(){
 function loadBabelApp(){
   // Poll until Babel is available, then compile
   if(typeof Babel === "undefined"){
-    showStatus("Loading compiler...");
+    showStatus("Preparing your gradebook…");
     setTimeout(loadBabelApp, 300);
     return;
   }
   doLoadBabelApp();
 }
 function doLoadBabelApp(){
-  showStatus("Step 1: Starting compiler...");
+  showStatus("Preparing your gradebook…");
   setTimeout(function(){
     try {
-      showStatus("Step 2: Got app code (" + Math.round(window._babelAppCode.length/1024) + "KB), transforming...");
+      showStatus("Preparing your gradebook…");
       var code = window._babelAppCode;
       setTimeout(function(){
         try {
           var transformed = Babel.transform(code, {presets:["react"]}).code;
-          showStatus("Step 3: Compiled OK (" + Math.round(transformed.length/1024) + "KB), executing...");
+          showStatus("Almost ready…");
           setTimeout(function(){
             try {
               var globals = "var useState=React.useState,useEffect=React.useEffect,useRef=React.useRef,useCallback=React.useCallback,useMemo=React.useMemo,useContext=React.useContext,useReducer=React.useReducer,useLayoutEffect=React.useLayoutEffect;\n";
               var fn = new Function(globals + transformed);
               fn();
-              showStatus("Step 4: Executed OK, rendering...");
+              showStatus("Almost ready…");
             } catch(execErr) {
-              showStatus("Exec error: " + execErr.message, "#f87171");
+              showLoadError("Something went wrong while starting the app.", execErr&&execErr.message);
             }
           }, 100);
         } catch(compileErr) {
-          showStatus("Compile error: " + compileErr.message, "#f87171");
+          showLoadError("Something went wrong while starting the app.", compileErr&&compileErr.message);
         }
       }, 200);
           setTimeout(function(){
             try {
               var appRoot = document.getElementById("app-root");
-              showStatus("Checking render... appState=" + !!window._appState + " appUser=" + !!window._appUser + " rootChildren=" + (appRoot ? appRoot.children.length : "null"), "#4caf50");
+              showStatus("Almost ready…");
               if(appRoot && appRoot.children.length > 0) {
                 document.getElementById("loading-app").style.display="none";
                 appRoot.style.display="block";
@@ -1120,26 +1144,26 @@ function doLoadBabelApp(){
               } else {
                 // Try calling _renderApp manually if it exists
                 if(window._renderApp && window._appState && window._appUser) {
-                  showStatus("Re-triggering render...", "#fbbf24");
+                  showStatus("Almost ready…");
                   window._renderApp(window._appState);
                   setTimeout(function(){
                     if(appRoot && appRoot.children.length > 0) {
                       document.getElementById("loading-app").style.display="none";
                       appRoot.style.display="block";
                     } else {
-                      showStatus("ERROR: app-root still empty after re-render attempt", "#f87171");
+                      showLoadError("The app didn\u2019t finish loading.", "app-root empty after re-render");
                     }
                   }, 500);
                 } else {
-                  showStatus("ERROR: state=" + !!window._appState + " user=" + !!window._appUser + " renderApp=" + !!window._renderApp, "#f87171");
+                  showLoadError("The app didn\u2019t finish loading.", "state="+!!window._appState+" user="+!!window._appUser+" renderApp="+!!window._renderApp);
                 }
               }
             } catch(e2) {
-              showStatus("Display error: " + e2.message, "#f87171");
+              showLoadError("Something went wrong while starting the app.", e2&&e2.message);
             }
           }, 1200);
     } catch(e) {
-      showStatus("Outer error: " + e.message, "#f87171");
+      showLoadError("Something went wrong while starting the app.", e&&e.message);
     }
   }, 100);
 }
