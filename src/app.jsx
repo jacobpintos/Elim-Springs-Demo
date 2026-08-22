@@ -5065,18 +5065,27 @@ function Settings({state,upd}) {
         </div>
       </div>
       <div className="card">
-        <div style={{fontSize:13,fontWeight:600,marginBottom:12}}>💾 Daily Snapshots (kept 30 days)</div>
-        {!(state.saves||[]).length&&<p className="emp">No snapshots yet — one is captured automatically each day</p>}
-        <div style={{display:"flex",flexDirection:"column",gap:5,maxHeight:300,overflowY:"auto"}}>
-          {(state.saves||[]).slice().sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).map(snap=>(
-            <div key={snap.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 9px",background:"var(--bg)",borderRadius:6,fontSize:11}}>
-              <span>📅 {fmt(snap.date)} — {new Date(snap.timestamp).toLocaleTimeString()}</span>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>💾 Restore Points (3 most recent)</div>
+        <div style={{fontSize:11,color:"var(--t3)",marginBottom:12}}>
+          A copy of everything is saved each time a teacher or admin signs in, taken before any
+          changes are made that session. Only the three newest are kept — when a fourth is made the
+          oldest is deleted for good.
+        </div>
+        {!(state.saves||[]).length&&<p className="emp">No restore points yet — the first is saved at the next sign-in</p>}
+        <div style={{display:"flex",flexDirection:"column",gap:5}}>
+          {(state.saves||[]).slice().sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).map((snap,i)=>(
+            <div key={snap.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,
+              padding:"8px 10px",background:"var(--bg)",borderRadius:7,fontSize:11,flexWrap:"wrap"}}>
+              <span>
+                📅 {fmt(snap.date)} — {new Date(snap.timestamp).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})}
+                {i===0&&<span className="bdg bdgg" style={{marginLeft:7}}>Most recent</span>}
+              </span>
               <div style={{display:"flex",gap:5}}>
                 <button className="bs o" onClick={()=>{
-                  if(window.confirm("Restore the snapshot from "+fmt(snap.date)+"? Current grades and data will be replaced. Your snapshots and activity log are kept."))
+                  if(window.confirm("Roll everything back to "+fmt(snap.date)+" at "+new Date(snap.timestamp).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+"?\n\nGrades, attendance and everything else recorded since then will be replaced. Your restore points and activity log are kept."))
                     window._restoreSnapshot(snap.id).catch(e=>alert("Failed to restore: "+((e&&e.message)||e)));
                 }}>Restore</button>
-                <button className="bs r" onClick={()=>{ if(window.confirm("Delete this snapshot?")) window._deleteSnapshot(snap.id); }}>🗑</button>
+                <button className="bs r" onClick={()=>{ if(window.confirm("Delete this restore point? Only "+((state.saves||[]).length-1)+" will be left.")) window._deleteSnapshot(snap.id); }}>🗑</button>
               </div>
             </div>
           ))}

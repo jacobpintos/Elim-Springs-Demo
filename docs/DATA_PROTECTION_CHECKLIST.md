@@ -17,12 +17,13 @@
 | Multi-factor authentication (TOTP / authenticator app) | ⏳ Code ready | Requires enabling **Identity Platform + TOTP** in Firebase (see DEPLOYMENT.md §11) |
 | Idle auto-logout (20 min) | ✅ Done | Protects unattended/shared devices |
 | Activity log (who changed what, 30-day) | ✅ Done | Staff-only |
-| Daily backups (30-day) | ✅ Done | |
+| In-app restore points (3 most recent, taken at each staff sign-in) | ✅ Done | Short-term undo, **not** a backup — see below |
 | Encryption in transit & at rest | ✅ Done | Firebase/Firestore provides this by default |
 | Tightened Content-Security-Policy | ✅ Done | Allowlist of required hosts |
 | Remove demo/fake student data before go-live | ⬜ To do | Use **Settings → Clear All Data** |
 
 **Recommended additional technical steps**
+- Turn on **scheduled Firestore backups** in the Google Cloud console. The in-app restore points only cover the last three staff sign-ins and live in the same project as the data; they will not recover a mistake found weeks later.
 - In Firebase Auth, turn on the **server-side password policy** (Identity Platform) so the hosted password-reset page enforces the same strength rules as the app.
 - Require **email verification** for staff accounts.
 - Consider printable **backup codes** or a documented admin reset path for lost MFA devices.

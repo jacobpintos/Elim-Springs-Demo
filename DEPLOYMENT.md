@@ -261,26 +261,42 @@ copied into the parent/student portal docs.
   days, so nothing older is stored or displayed during normal use. No Firestore
   TTL policy or console configuration is required.
 
-## 9. Daily snapshots
+## 9. Restore points (sign-in snapshots)
 
-**Settings → Daily Snapshots** keeps one restorable backup of the gradebook per
-day, for 30 days.
+**Settings → Restore Points** keeps the **three most recent** restorable copies
+of the gradebook.
 
-- **Capture:** the staff app takes a snapshot at local **midnight** (a timer),
-  and also catches up on load if the day has no snapshot yet — so a day is never
-  missed just because nobody had the app open at 00:00. Only one snapshot is
-  kept per calendar day.
-- **Storage:** because a Firestore document is capped at 1 MB, we can't hold 30
+- **Capture:** one is taken each time a **teacher or admin signs in**, from the
+  data as it arrived — before that person has changed anything. So the newest
+  restore point is always "how things looked when I sat down."
+- **Retention:** only the newest three are kept. The moment a fourth is created
+  the oldest is **deleted outright** — its `snapshots/{id}` document is removed,
+  not just hidden. There is no 30-day grace period and nothing to undelete.
+- **Two guards** stop the three slots being wasted, both in
+  `captureLoginSnapshot()` in `index.html`:
+  - a sign-in within **10 minutes** of the newest restore point does not make a
+    new one (so refreshing the page a few times doesn't burn through all three);
+  - neither does a sign-in where the data is **byte-identical** to the newest
+    restore point (compared via a short hash stored in the metadata).
+
+  Raise or lower these with `SNAP_KEEP` and `SNAP_MIN_GAP_MS` at the top of that
+  section.
+- **Storage:** because a Firestore document is capped at 1 MB, we can't hold
   full copies of the gradebook inside `state/main`. Instead, small metadata
-  (`{id,date,timestamp}`) lives in `state.saves` (the list you see), and each
-  full day's copy lives in its own `snapshots/{id}` document — **staff-only** via
+  (`{id,date,timestamp,hash}`) lives in `state.saves` (the list you see), and
+  each full copy lives in its own `snapshots/{id}` document — **staff-only** via
   the rules. Requires deploying the updated `firestore.rules` (the `snapshots`
   match).
-- **Retention:** on each capture, snapshot documents (and their metadata) older
-  than 30 days are deleted.
-- **Restore** rolls the gradebook back to that day's copy and reloads. Your
-  **snapshot history and activity log are preserved**, and the restore is itself
-  recorded in the activity log. A snapshot can also be deleted manually.
+- **Restore** rolls the gradebook back to that copy and reloads. Your
+  **restore points and activity log are preserved**, and the restore is itself
+  recorded in the activity log. A restore point can also be deleted manually.
+
+> **This is not a backup strategy.** Three restore points spanning a few days of
+> sign-ins will not recover a mistake found weeks later, and they live in the
+> same Firebase project as the live data. For real protection, turn on
+> [scheduled Firestore backups](https://firebase.google.com/docs/firestore/backups)
+> in the Google Cloud console, which keep independent copies with their own
+> retention.
 
 ## 10. Excel export
 

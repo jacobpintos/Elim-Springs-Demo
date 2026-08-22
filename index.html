@@ -362,7 +362,6 @@ setTimeout(function(){ if(!_authResolved) _showLoginScreen(); },6000);
 var _unsubs=[], _fannedOnce=false, _lastPersisted=null, _snapStarted=false;
 window._userLinks={};
 window._saveTimer=null;
-window._snapTimer=null;
 
 function _clearListeners(){ _unsubs.forEach(function(fn){try{fn&&fn();}catch(e){}}); _unsubs=[]; }
 function _school(){ return window._db.collection("schools").doc(window._schoolId); }
@@ -639,8 +638,9 @@ function loadTeacher(user){
     if(window._renderApp) window._renderApp(_appState, _appUser);
     // Make sure per-student portal read-models exist for the current roster.
     if(!_fannedOnce && _appState.students){ _fannedOnce=true; fanOutPortals(_appState); ensureResponsesDocs(_appState); }
-    // Start the daily-snapshot scheduler once (captures today's snapshot if missing).
-    if(!_snapStarted && _appState){ _snapStarted=true; scheduleDailySnapshot(); }
+    // Capture this sign-in's restore point once, from the data as it arrived —
+    // before the teacher has had a chance to change anything.
+    if(!_snapStarted && _appState){ _snapStarted=true; captureLoginSnapshot(); }
   }, function(err){
     showLoadError("We couldn\u2019t load your school data.", (err&&err.code?err.code+": ":"")+(err&&err.message||""));
   }));
@@ -870,14 +870,18 @@ function saveState(newState){
   },1500);
 }
 
-// ─── Daily snapshots ────────────────────────────────────────────────────────
-// One snapshot per calendar day, kept for 30 days. Because a Firestore document
-// is capped at 1 MB, we can't keep 30 full copies of the gradebook inside
-// state/main — so lightweight metadata ({id,date,timestamp}) lives in
-// state.saves (what the Settings list shows) and the full copy lives in its own
-// snapshots/{id} document (staff-only via rules). A timer fires at local
-// midnight, and a catch-up runs on load so a day is never missed just because
-// the app wasn't open at 00:00.
+// ─── Sign-in snapshots ──────────────────────────────────────────────────────
+// A restore point is captured when a teacher or admin signs in, taken from the
+// data as it stood before they touched anything. Only the three newest are
+// kept; as a fourth is created the oldest is deleted outright — blob and
+// metadata together.
+//
+// Because a Firestore document is capped at 1 MB we can't keep full copies of
+// the gradebook inside state/main, so lightweight metadata ({id,date,timestamp,
+// hash}) lives in state.saves (what the Settings list shows) while the full
+// copy lives in its own snapshots/{id} document (staff-only via rules).
+var SNAP_KEEP=3;
+var SNAP_MIN_GAP_MS=10*60*1000;
 function _localDate(dt){
   dt=dt||new Date();
   return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
@@ -888,32 +892,35 @@ function _stateForSnapshot(state){
   delete c.auditLog;   // the activity log is a separate audit trail
   return c;
 }
-function captureDailySnapshotIfNeeded(){
+// Small non-cryptographic digest, used only to notice "nothing changed".
+function _snapHash(s){
+  var h=5381;
+  for(var i=0;i<s.length;i++){ h=((h*33)^s.charCodeAt(i))>>>0; }
+  return s.length+"_"+h.toString(36);
+}
+function captureLoginSnapshot(){
   if(!_appUser||!_isStaffRole(_appUser.role)||!_appState) return;
-  var d=_localDate();
-  var saves=(_appState.saves||[]);
-  if(saves.some(function(s){return s.date===d;})) return; // already have today's
+  var saves=(_appState.saves||[]).slice().sort(function(a,b){return (b.timestamp||0)-(a.timestamp||0);});
+  var body=JSON.stringify(_stateForSnapshot(_appState));
+  var hash=_snapHash(body);
+  var newest=saves[0];
   var ts=Date.now();
+  // With only three slots, don't spend one on a copy that adds nothing: a page
+  // refresh moments later, or a sign-in where nothing has changed since.
+  if(newest&&(newest.hash===hash||ts-(newest.timestamp||0)<SNAP_MIN_GAP_MS)) return;
+  var d=_localDate();
   var id="snap_"+d+"_"+Math.random().toString(36).slice(2,6);
   _school().collection("snapshots").doc(id)
-    .set({date:d,timestamp:ts,snap:JSON.stringify(_stateForSnapshot(_appState))})
+    .set({date:d,timestamp:ts,snap:body})
+    .then(function(){
+      var meta=[{id:id,date:d,timestamp:ts,hash:hash}].concat(saves);
+      // Anything past the newest three is gone for good.
+      meta.slice(SNAP_KEEP).forEach(function(s){
+        _school().collection("snapshots").doc(s.id).delete().catch(function(){});
+      });
+      saveState(Object.assign({},_appState,{saves:meta.slice(0,SNAP_KEEP)}));
+    })
     .catch(function(e){console.error("Snapshot write error:",e);});
-  // Expire snapshots older than 30 days (delete the blob doc + drop the metadata).
-  var cutoff=ts-30*24*60*60*1000;
-  saves.filter(function(s){return (s.timestamp||0)<cutoff;})
-       .forEach(function(s){ _school().collection("snapshots").doc(s.id).delete().catch(function(){}); });
-  var meta=saves.filter(function(s){return (s.timestamp||0)>=cutoff;}).concat([{id:id,date:d,timestamp:ts}]);
-  saveState(Object.assign({},_appState,{saves:meta}));
-}
-function scheduleDailySnapshot(){
-  captureDailySnapshotIfNeeded();
-  var now=new Date();
-  var next=new Date(now.getFullYear(),now.getMonth(),now.getDate()+1,0,0,10); // 00:00:10 next local day
-  if(window._snapTimer) clearTimeout(window._snapTimer);
-  window._snapTimer=setTimeout(function(){
-    captureDailySnapshotIfNeeded();
-    scheduleDailySnapshot();
-  }, Math.max(1000, next-now));
 }
 // Restore a snapshot: roll the gradebook back to the stored copy while keeping
 // the current snapshot history and activity log, then reload.
@@ -1069,7 +1076,6 @@ function doLogout(){
   _loggingIn=false;
   _clearListeners();
   _fannedOnce=false; _snapStarted=false;
-  if(window._snapTimer){ clearTimeout(window._snapTimer); window._snapTimer=null; }
   window._auth.signOut().then(function(){
     document.getElementById("app-root").style.display="none";
     document.getElementById("loading-app").style.display="none";
@@ -13653,30 +13659,44 @@ function Settings({
     style: {
       fontSize: 13,
       fontWeight: 600,
+      marginBottom: 4
+    }
+  }, "\uD83D\uDCBE Restore Points (3 most recent)"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--t3)",
       marginBottom: 12
     }
-  }, "\uD83D\uDCBE Daily Snapshots (kept 30 days)"), !(state.saves || []).length && React.createElement("p", {
+  }, "A copy of everything is saved each time a teacher or admin signs in, taken before any changes are made that session. Only the three newest are kept \u2014 when a fourth is made the oldest is deleted for good."), !(state.saves || []).length && React.createElement("p", {
     className: "emp"
-  }, "No snapshots yet \u2014 one is captured automatically each day"), React.createElement("div", {
+  }, "No restore points yet \u2014 the first is saved at the next sign-in"), React.createElement("div", {
     style: {
       display: "flex",
       flexDirection: "column",
-      gap: 5,
-      maxHeight: 300,
-      overflowY: "auto"
+      gap: 5
     }
-  }, (state.saves || []).slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).map(snap => React.createElement("div", {
+  }, (state.saves || []).slice().sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)).map((snap, i) => React.createElement("div", {
     key: snap.id,
     style: {
       display: "flex",
       alignItems: "center",
       justifyContent: "space-between",
-      padding: "7px 9px",
+      gap: 8,
+      padding: "8px 10px",
       background: "var(--bg)",
-      borderRadius: 6,
-      fontSize: 11
+      borderRadius: 7,
+      fontSize: 11,
+      flexWrap: "wrap"
     }
-  }, React.createElement("span", null, "\uD83D\uDCC5 ", fmt(snap.date), " \u2014 ", new Date(snap.timestamp).toLocaleTimeString()), React.createElement("div", {
+  }, React.createElement("span", null, "\uD83D\uDCC5 ", fmt(snap.date), " \u2014 ", new Date(snap.timestamp).toLocaleTimeString([], {
+    hour: "numeric",
+    minute: "2-digit"
+  }), i === 0 && React.createElement("span", {
+    className: "bdg bdgg",
+    style: {
+      marginLeft: 7
+    }
+  }, "Most recent")), React.createElement("div", {
     style: {
       display: "flex",
       gap: 5
@@ -13684,12 +13704,15 @@ function Settings({
   }, React.createElement("button", {
     className: "bs o",
     onClick: () => {
-      if (window.confirm("Restore the snapshot from " + fmt(snap.date) + "? Current grades and data will be replaced. Your snapshots and activity log are kept.")) window._restoreSnapshot(snap.id).catch(e => alert("Failed to restore: " + (e && e.message || e)));
+      if (window.confirm("Roll everything back to " + fmt(snap.date) + " at " + new Date(snap.timestamp).toLocaleTimeString([], {
+        hour: "numeric",
+        minute: "2-digit"
+      }) + "?\n\nGrades, attendance and everything else recorded since then will be replaced. Your restore points and activity log are kept.")) window._restoreSnapshot(snap.id).catch(e => alert("Failed to restore: " + (e && e.message || e)));
     }
   }, "Restore"), React.createElement("button", {
     className: "bs r",
     onClick: () => {
-      if (window.confirm("Delete this snapshot?")) window._deleteSnapshot(snap.id);
+      if (window.confirm("Delete this restore point? Only " + ((state.saves || []).length - 1) + " will be left.")) window._deleteSnapshot(snap.id);
     }
   }, "\uD83D\uDDD1")))))));
 }
