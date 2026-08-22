@@ -608,6 +608,30 @@ function ensureResponsesDocs(state){
   });
 }
 
+// Fold the families' own permission-slip documents into the teacher's copy of
+// the events. Held separately because responses/ and state/main arrive in
+// whichever order Firestore delivers them: if a parent's answer lands first
+// there is no state to merge it into yet, so the latest map is kept here and
+// re-applied as soon as the state document shows up.
+var _lastResponses=null;
+function _applyResponses(map){
+  if(!map||!_appState||!_appState.events) return;
+  var changed=false;
+  var events=_appState.events.map(function(e){
+    var resp=Object.assign({},e.responses||{});
+    Object.keys(map).forEach(function(sid){
+      var slips=(map[sid].slips)||{};
+      if(slips[e.id] && JSON.stringify(resp[sid])!==JSON.stringify(slips[e.id])){ resp[sid]=slips[e.id]; changed=true; }
+    });
+    return Object.assign({},e,{responses:resp});
+  });
+  if(!changed) return;
+  _appState=Object.assign({},_appState,{events:events});
+  window._appState=_appState;
+  if(window._renderApp) window._renderApp(_appState,_appUser);
+  saveState(_appState);
+}
+
 // ─── Teacher load path: subscribes to the master state document ─────────────
 function loadTeacher(user){
   showStatus("Loading school data…");
@@ -635,6 +659,8 @@ function loadTeacher(user){
     window._appState = _appState;
     window._appUser = _appUser;
     _lastPersisted = _appState;
+    // Answers that arrived before this document did would otherwise be dropped.
+    if(_lastResponses) _applyResponses(_lastResponses);
     if(window._renderApp) window._renderApp(_appState, _appUser);
     // Make sure per-student portal read-models exist for the current roster.
     if(!_fannedOnce && _appState.students){ _fannedOnce=true; fanOutPortals(_appState); ensureResponsesDocs(_appState); }
@@ -659,22 +685,8 @@ function loadTeacher(user){
   // view (and persist them into the master document).
   _unsubs.push(_school().collection("responses").onSnapshot(function(qs){
     var map={}; qs.forEach(function(d){map[d.id]=d.data()||{};});
-    if(!_appState||!_appState.events) return;
-    var changed=false;
-    var events=_appState.events.map(function(e){
-      var resp=Object.assign({},e.responses||{});
-      Object.keys(map).forEach(function(sid){
-        var slips=(map[sid].slips)||{};
-        if(slips[e.id] && JSON.stringify(resp[sid])!==JSON.stringify(slips[e.id])){ resp[sid]=slips[e.id]; changed=true; }
-      });
-      return Object.assign({},e,{responses:resp});
-    });
-    if(changed){
-      _appState=Object.assign({},_appState,{events:events});
-      window._appState=_appState;
-      if(window._renderApp) window._renderApp(_appState,_appUser);
-      saveState(_appState);
-    }
+    _lastResponses=map;
+    _applyResponses(map);
   }, function(e){console.error("responses listener:",e);}));
 
   revealApp();
@@ -922,14 +934,56 @@ function captureLoginSnapshot(){
     })
     .catch(function(e){console.error("Snapshot write error:",e);});
 }
+// The parts of an event a family would have weighed before authorizing a trip.
+// If any of them differ, an answer given against one version says nothing about
+// the other.
+function _slipTerms(e){
+  return JSON.stringify([e.name||"",e.startDate||"",e.endDate||"",e.location||"",
+                         e.description||"",!!e.permissionSlip]);
+}
+/**
+ * Carry families' permission-slip answers across a rollback.
+ *
+ * Rolling the gradebook back shouldn't un-answer a slip a parent has already
+ * dealt with — that would ask them to approve the same trip twice. So for each
+ * event being restored, the answer currently on file wins, but only where it
+ * still means the same thing: the event must still exist, still ask for a slip,
+ * still include that student, and read exactly as it does now. If a teacher
+ * moved the date or changed the destination in between, the family agreed to
+ * something the restored event no longer says, and the snapshot's answer (or
+ * none at all) stands so they get asked again.
+ */
+function _keepSlipAnswers(restoredEvents, liveEvents){
+  var live={}; (liveEvents||[]).forEach(function(e){ if(e&&e.id) live[e.id]=e; });
+  var kept=0;
+  var events=(restoredEvents||[]).map(function(e){
+    var cur=live[e.id];
+    if(!cur||!e.permissionSlip) return e;
+    if(_slipTerms(e)!==_slipTerms(cur)) return e;     // edited in between — re-ask
+    var resp=Object.assign({},e.responses||{});
+    Object.keys(cur.responses||{}).forEach(function(sid){
+      if((e.assignedStudents||[]).indexOf(sid)<0) return;   // not on this trip any more
+      var answer=cur.responses[sid];
+      if(!answer) return;
+      if(JSON.stringify(resp[sid])===JSON.stringify(answer)) return;
+      resp[sid]=answer; kept++;
+    });
+    return Object.assign({},e,{responses:resp});
+  });
+  return {events:events, kept:kept};
+}
 // Restore a snapshot: roll the gradebook back to the stored copy while keeping
-// the current snapshot history and activity log, then reload.
+// the current snapshot history, activity log and permission-slip answers, then
+// reload.
 window._restoreSnapshot=function(id){
   return _school().collection("snapshots").doc(id).get().then(function(snap){
     if(!snap.exists) throw new Error("Snapshot data not found (it may have expired).");
     var r=JSON.parse(snap.data().snap);
-    var log=pruneLog((((_appState||{}).auditLog)||[]).concat([window._auditEntry("data","Restored snapshot from "+(snap.data().date||id))]));
-    var merged=Object.assign({},r,{saves:(_appState&&_appState.saves)||[],auditLog:log});
+    var slips=_keepSlipAnswers(r.events,(_appState||{}).events);
+    var note="Restored snapshot from "+(snap.data().date||id)+
+      (slips.kept?" (kept "+slips.kept+" permission slip answer"+(slips.kept===1?"":"s")+")":"");
+    var log=pruneLog((((_appState||{}).auditLog)||[]).concat([window._auditEntry("data",note)]));
+    var merged=Object.assign({},r,{events:slips.events,saves:(_appState&&_appState.saves)||[],auditLog:log});
     if(window._saveTimer) clearTimeout(window._saveTimer);
     return _school().collection("state").doc("main").set(merged).then(function(){ window.location.reload(); });
   });
@@ -1075,7 +1129,7 @@ function _handleMfaSignIn(error){
 function doLogout(){
   _loggingIn=false;
   _clearListeners();
-  _fannedOnce=false; _snapStarted=false;
+  _fannedOnce=false; _snapStarted=false; _lastResponses=null;
   window._auth.signOut().then(function(){
     document.getElementById("app-root").style.display="none";
     document.getElementById("loading-app").style.display="none";
@@ -13707,7 +13761,7 @@ function Settings({
       if (window.confirm("Roll everything back to " + fmt(snap.date) + " at " + new Date(snap.timestamp).toLocaleTimeString([], {
         hour: "numeric",
         minute: "2-digit"
-      }) + "?\n\nGrades, attendance and everything else recorded since then will be replaced. Your restore points and activity log are kept.")) window._restoreSnapshot(snap.id).catch(e => alert("Failed to restore: " + (e && e.message || e)));
+      }) + "?\n\nGrades, attendance and everything else recorded since then will be replaced.\n\nKept: your restore points, the activity log, and families' permission slip answers — so no parent is asked to approve the same trip twice. An answer is only dropped if the event itself was edited since.")) window._restoreSnapshot(snap.id).catch(e => alert("Failed to restore: " + (e && e.message || e)));
     }
   }, "Restore"), React.createElement("button", {
     className: "bs r",

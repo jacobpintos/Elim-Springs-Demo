@@ -288,8 +288,20 @@ of the gradebook.
   the rules. Requires deploying the updated `firestore.rules` (the `snapshots`
   match).
 - **Restore** rolls the gradebook back to that copy and reloads. Your
-  **restore points and activity log are preserved**, and the restore is itself
-  recorded in the activity log. A restore point can also be deleted manually.
+  **restore points, activity log and families' permission-slip answers are
+  preserved**, and the restore is itself recorded in the activity log (including
+  how many slip answers it carried across). A restore point can also be deleted
+  manually.
+- **Permission slips across a rollback:** a family that has already answered a
+  slip is not asked again just because a teacher rolled the gradebook back.
+  For each restored event, the answer currently on file wins — but only where it
+  still means the same thing. `_keepSlipAnswers()` in `index.html` requires that
+  the event still exists, still asks for a slip, still lists that student, and
+  that its **name, dates, location and description are unchanged**. If a teacher
+  moved the date or changed the destination in between, the family agreed to
+  something the restored event no longer says, so their answer is dropped and
+  they are asked again. Parents' own `responses/{studentId}` documents are never
+  touched by a restore.
 
 > **This is not a backup strategy.** Three restore points spanning a few days of
 > sign-ins will not recover a mistake found weeks later, and they live in the

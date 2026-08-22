@@ -5082,7 +5082,7 @@ function Settings({state,upd}) {
               </span>
               <div style={{display:"flex",gap:5}}>
                 <button className="bs o" onClick={()=>{
-                  if(window.confirm("Roll everything back to "+fmt(snap.date)+" at "+new Date(snap.timestamp).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+"?\n\nGrades, attendance and everything else recorded since then will be replaced. Your restore points and activity log are kept."))
+                  if(window.confirm("Roll everything back to "+fmt(snap.date)+" at "+new Date(snap.timestamp).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+"?\n\nGrades, attendance and everything else recorded since then will be replaced.\n\nKept: your restore points, the activity log, and families' permission slip answers — so no parent is asked to approve the same trip twice. An answer is only dropped if the event itself was edited since."))
                     window._restoreSnapshot(snap.id).catch(e=>alert("Failed to restore: "+((e&&e.message)||e)));
                 }}>Restore</button>
                 <button className="bs r" onClick={()=>{ if(window.confirm("Delete this restore point? Only "+((state.saves||[]).length-1)+" will be left.")) window._deleteSnapshot(snap.id); }}>🗑</button>
