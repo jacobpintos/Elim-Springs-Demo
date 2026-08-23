@@ -1019,6 +1019,9 @@ function MultiPeriodChart({periods}) {
 }
 
 // ─── CSS ──────────────────────────────────────────────────────────────────────
+// NOT the live stylesheet. The page is styled by the <style> block in the head
+// of index.html; this copy is only reached by the unused App() component below
+// and editing it changes nothing on screen.
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
@@ -1254,26 +1257,31 @@ body{background:var(--bg);color:var(--t1);min-height:100vh;}
 
 // ─── TOUR ─────────────────────────────────────────────────────────────────────
 const TEACHER_TOUR=[
-  {tab:"dashboard",title:"📊 Dashboard",body:"Your home base. See upcoming assignments due this week, attendance warnings, Iowa compliance alerts, and quick stats for all students."},
-  {tab:"students",title:"👥 Students",body:"Add and manage students here. Assign subjects, set grade levels, and link parent accounts. Click a student to see their full profile and subjects."},
-  {tab:"gradebook",title:"📊 Gradebook",body:"Select a student then enter grades per assignment. Use the View selector to see grades by quarter or as a projected final. Add subjects and assignments with the + buttons."},
-  {tab:"gradebook",title:"📅 Quarter View",body:"The View dropdown lets you switch between quarters. Projected Final weights all quarters with grades equally — matching what will appear on the transcript when all quarters close."},
-  {tab:"attendance",title:"📅 Attendance",body:"Mark daily attendance as Present, Absent, Excused, or Tardy. Upload excuse documents with 📎. Generate monthly Iowa compliance reports with 📋."},
-  {tab:"behavior",title:"⭐ Behavior",body:"For MDN students: rate behavior 1–5 stars. For letter grade students: log incidents with descriptions. Both show a history log per student."},
-  {tab:"notes",title:"📝 Notes",body:"Record strengths and areas for improvement per student. These notes appear on progress reports for parent-teacher conferences."},
-  {tab:"events",title:"🗓️ Events",body:"Create school events with optional permission slips. Toggle 📚 Assignments and 📅 Attendance on the calendar. Quarter boundaries are marked automatically."},
-  {tab:"reports",title:"📋 Progress Reports",body:"Generate reports for any date range. Multiple periods show a comparison bar chart and a grade trajectory line graph showing how grades moved over time."},
-  {tab:"reports",title:"📋 Transcripts",body:"Generate official transcripts per student. Quarterly grade columns populate as quarters are finalized. Final grade only appears once all assigned quarters are closed."},
-  {tab:"settings",title:"⚙️ Settings",body:"Configure school year dates, quarter dates (use ⟳ Auto-Calculate to divide evenly), grading scale, hours per day, and minimum hours. Finalize quarters here to lock grades."},
-  {tab:"accounts",title:"👤 Accounts",body:"Create parent and student login accounts. Parents see their child's grades, upcoming assignments, events, and can use the grade calculator from their portal."},
+  {tab:"dashboard",title:"📊 Dashboard",body:"What needs you today: work that is past due and still ungraded, whether attendance has been marked, permission slips nobody has answered, and how many days are left in the quarter. Below that, upcoming events and the grading queue."},
+  {tab:"students",title:"👥 Students",body:"The roster. Click a student to open their profile, set their grade level, and manage their subjects. Students are added over in Accounts — that is also where you link a parent to them."},
+  {tab:"gradebook",title:"📊 Gradebook",body:"Pick a student, then a subject, then enter a score on each assignment. + Assignment opens a form that spells out what each field does, including which date decides the quarter. Export All to Excel gives you the whole class in one workbook."},
+  {tab:"gradebook",title:"📅 Quarter View",body:"The View dropdown switches between quarters. Projected Final weights all quarters that have grades equally — the same figure that reaches the transcript once every quarter is closed."},
+  {tab:"attendance",title:"📅 Attendance",body:"Mark each day Present, Absent, Excused, or Tardy. Attach an excuse document with 📎. 📋 generates the monthly Iowa compliance report."},
+  {tab:"behavior",title:"⭐ Behavior",body:"Students on the MDN scale get a 1–5 star rating. Students on letter grades get written incident entries. Both keep a dated history."},
+  {tab:"notes",title:"📝 Notes",body:"Strengths and areas to work on, per student. These carry through onto progress reports for conferences."},
+  {tab:"events",title:"🗓️ Events",body:"Create events, and tick Permission Slip when you need a parent's answer. Families see pending slips beside their calendar and can change their answer later. Quarter boundaries appear on the calendar automatically."},
+  {tab:"reports",title:"📋 Progress Reports",body:"Reports for any date range you choose. Add more than one period to get a comparison bar chart and a trajectory line showing how grades moved."},
+  {tab:"reports",title:"📋 Transcripts",body:"Official transcripts per student. Quarter columns fill in as you finalize quarters, and the final grade appears once every assigned quarter is closed."},
+  {tab:"accounts",title:"👤 Accounts",body:"Everything to do with people. Add a student to the roster with or without a login, create the login later, and link parents — a parent can be linked to several children. Admins can also create other teacher and admin accounts here."},
+  {tab:"activity",title:"📜 Activity",body:"Who changed what, and when. Every edit, account change, and restore is recorded. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."},
+  {tab:"settings",title:"⚙️ Settings",body:"School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar."},
+  {tab:"settings",title:"💾 Restore Points & Year End",body:"A full copy is saved each time a teacher or admin signs in, and the three newest are kept — restore one to undo a bad afternoon. Promote Students, further down, closes out the year: it archives everyone to their transcript first, then moves them up a grade."},
 ];
 
+// Shown to a parent linked to more than one child.
+const PORTAL_SWITCH_STEP={tab:"calendar",title:"👨‍👩‍👧 Your children",body:"The buttons at the top switch between your children — everything on the page follows your choice. An amber number on a name means that child has a permission slip still waiting on you."};
+
 const PORTAL_TOUR=[
-  {tab:"calendar",title:"🗓️ Calendar",body:"Your home screen shows upcoming events, assignment due dates, and quarter boundaries. Assignments are shown by default — click any item for details."},
-  {tab:"grades",title:"📊 Grades",body:"See current grades and averages per subject. Use the Grade Calculator (🎯) to see what score you need to reach your target — by quarter or for the final grade."},
-  {tab:"attendance",title:"📅 Attendance",body:"View your full attendance record — present, absent, excused, and tardy days — with total hours attended shown for Iowa compliance."},
-  {tab:"notes",title:"📝 Notes",body:"Your teacher's notes on your strengths and areas to work on. These come from progress report conferences."},
-  {tab:"history",title:"📚 History",body:"Past school years appear here after year-end promotion. Official transcripts can be requested from your teacher."},
+  {tab:"calendar",title:"🗓️ Calendar",body:"Your home screen: upcoming events, assignment due dates, and quarter boundaries. Permission slips waiting on you sit to the side — you'll be asked to confirm before anything is sent, and you can change your answer afterwards."},
+  {tab:"grades",title:"📊 Grades",body:"Current grade and average for each subject. Open a subject to see the individual assignments. The Grade Calculator (🎯) works out what score is still needed to reach a target, by quarter or for the final grade."},
+  {tab:"attendance",title:"📅 Attendance",body:"The full attendance record — present, absent, excused, and tardy — with total hours attended for Iowa's requirements."},
+  {tab:"notes",title:"📝 Notes",body:"Your teacher's notes on strengths and areas to work on. These are the same notes used at progress report conferences."},
+  {tab:"history",title:"📚 History",body:"Past school years appear here once the year has been closed out. Ask your teacher if you need an official transcript."},
 ];
 
 function TourOverlay({steps,stepIdx,onNext,onBack,onEnd,onTabChange}) {
@@ -1439,7 +1447,7 @@ function TeacherApp({state,accounts,upd,user,logout,isMobile}) {
     ...ALL_NAV_ITEMS.filter(n=>!pinnedIds.includes(n.id)),
   ];
   return isMobile ? (
-    <div style={{display:"flex",flexDirection:"column",height:"100vh",background:"var(--bg)",overflow:"hidden"}}>
+    <div className="mshell">
       {/* Mobile top bar */}
       <div style={{background:"var(--c1)",borderBottom:"1px solid var(--br)",padding:"10px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center"}}>{LOGO?<img src={LOGO} alt="Empower Iowa" style={{height:22,display:"block"}}/>:<span style={{fontSize:15,fontWeight:700,color:"var(--acc)"}}>🏫 Empower Iowa</span>}</div>
@@ -1464,7 +1472,9 @@ function TeacherApp({state,accounts,upd,user,logout,isMobile}) {
       {/* Mobile bottom nav */}
       {showMoreMenu&&(
         <div style={{position:"fixed",inset:0,zIndex:300}} onClick={()=>setShowMoreMenu(false)}>
-          <div style={{position:"absolute",bottom:60,left:0,right:0,background:"var(--c1)",borderTop:"1px solid var(--br2)",padding:"12px 8px",display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4}}
+          {/* Sits directly above the nav bar, which grows by the safe-area
+              inset on a notched phone — a flat 60px would overlap it. */}
+          <div style={{position:"absolute",bottom:"calc(60px + env(safe-area-inset-bottom,0px))",left:0,right:0,background:"var(--c1)",borderTop:"1px solid var(--br2)",padding:"12px 8px",display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4}}
             onClick={e=>e.stopPropagation()}>
             {nav.slice(4).map(n=>(
               <button key={n.id} onClick={()=>{setTab(n.id);setShowMoreMenu(false);}}
@@ -1511,7 +1521,7 @@ function TeacherApp({state,accounts,upd,user,logout,isMobile}) {
             <div style={{minWidth:0,overflow:"hidden"}}><div style={{fontSize:11,fontWeight:600,color:"#0f172a",overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{user.name}</div><div style={{fontSize:10,color:"var(--t3)"}}>{user.role==="admin"?"Admin":"Teacher"}</div></div>
           </div>
           <div style={{display:"flex",gap:6,marginBottom:6}}>
-            <button className="bs" style={{flex:1,fontSize:10}} onClick={()=>startTour(tab)}>? Tour</button>
+            <button className="bs" style={{flex:1,fontSize:10}} onClick={()=>startTour(tab)}>Tour</button>
           </div>
           <button className="logobtn" onClick={logout}>Sign Out</button>
         </div>
@@ -4489,6 +4499,35 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
   );
 }
 
+function ActivityLog({state}){
+  const [q,setQ]=useState("");
+  const cutoff=Date.now()-30*24*60*60*1000;
+  const entries=(state.auditLog||[]).filter(e=>e&&(e.ts||0)>=cutoff).sort((a,b)=>(b.ts||0)-(a.ts||0));
+  const ql=q.trim().toLowerCase();
+  const filtered=ql?entries.filter(e=>(((e.actorName||"")+" "+(e.detail||"")+" "+(e.action||"")).toLowerCase().includes(ql))):entries;
+  const icon=r=>r==="admin"?"🛡️":r==="teacher"?"🎓":r==="parent"?"👨‍👩‍👧":r==="student"?"🧒":"•";
+  return (
+    <div className="pg">
+      <div className="ph"><div className="ptit">Activity Log</div></div>
+      <div style={{fontSize:11,color:"var(--t3)",marginBottom:12}}>Who changed what, and when. Entries are kept for 30 days, then removed automatically. Visible to teachers and admins only.</div>
+      <input className="inp" placeholder="Search by person or action…" value={q} onChange={e=>setQ(e.target.value)} style={{maxWidth:340,marginBottom:14}}/>
+      {!filtered.length&&<p className="emp">{entries.length?"No activity matches your search.":"No activity recorded in the last 30 days."}</p>}
+      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+        {filtered.map(e=>(
+          <div key={e.id} className="card" style={{display:"flex",gap:12,alignItems:"flex-start",padding:"9px 12px"}}>
+            <span style={{fontSize:16,lineHeight:"18px"}}>{icon(e.actorRole)}</span>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:12,fontWeight:600}}>{e.actorName||"Unknown"} <span style={{fontSize:10,color:"var(--t3)",fontWeight:400}}>· {e.actorRole||"—"}</span></div>
+              <div style={{fontSize:12,color:"var(--t2)",wordBreak:"break-word"}}>{e.detail||e.action||"—"}</div>
+            </div>
+            <div style={{fontSize:10,color:"var(--t3)",whiteSpace:"nowrap"}}>{new Date(e.ts).toLocaleString()}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ─── SETTINGS ────────────────────────────────────────────────────────────────
 function PwChecklist({pw,email}){
   if(!pw) return null;
@@ -5798,6 +5837,9 @@ function Portal({state,upd,user,logout,isMobile}) {
   // Scoped to this family's own children, and falls back to the first if the
   // selected one leaves the roster (graduates, transfers) mid-session.
   const stu=myStudents.find(s=>s.id===selectedStuId)||myStudents[0];
+  // Families with more than one child get an extra opening step explaining the
+  // switcher; everyone else gets the plain tour.
+  const portalTourSteps=myStudents.length>1?[PORTAL_SWITCH_STEP,...PORTAL_TOUR]:PORTAL_TOUR;
   // Slips waiting on this parent for a child other than the one on screen would
   // otherwise be invisible, so the switcher carries the count.
   const pendingSlipsFor=sid=>(state.events||[]).filter(e=>{
@@ -5856,7 +5898,7 @@ function Portal({state,upd,user,logout,isMobile}) {
           {[["grades","Grades"],["calendar","Calendar"],["attendance","Attendance"],["notes","Notes"],["history","History"]].map(([t,l])=>(
             <button key={t} className={"ptab"+(tab===t?" on":"")} onClick={()=>setTab(t)}>{l}</button>
           ))}
-          <button style={{fontSize:10,padding:"4px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,color:"#e2e8f0",cursor:"pointer",fontFamily:"inherit"}} onClick={()=>setTourStep(0)}>? Tour</button>
+          <button style={{fontSize:10,padding:"4px 8px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,color:"#e2e8f0",cursor:"pointer",fontFamily:"inherit"}} onClick={()=>setTourStep(0)}>Tour</button>
           <button style={{fontSize:11,padding:"5px 10px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,color:"#e2e8f0",cursor:"pointer",fontFamily:"inherit"}} onClick={()=>setShowPwReset(true)}>🔑 Password</button>
           <button style={{fontSize:11,padding:"5px 10px",background:"rgba(255,255,255,0.1)",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,color:"#e2e8f0",cursor:"pointer",fontFamily:"inherit"}} onClick={logout}>Sign Out</button>
         </div>
@@ -5897,7 +5939,7 @@ function Portal({state,upd,user,logout,isMobile}) {
         <MfaSection/>
       </div></div>}
       <div className="pcont">
-        {tourStep>=0&&<TourOverlay steps={PORTAL_TOUR} stepIdx={tourStep} onNext={()=>setTourStep(s=>s+1)} onBack={()=>setTourStep(s=>Math.max(0,s-1))} onEnd={endTour} onTabChange={t=>setTab(t)}/>}
+        {tourStep>=0&&<TourOverlay steps={portalTourSteps} stepIdx={tourStep} onNext={()=>setTourStep(s=>s+1)} onBack={()=>setTourStep(s=>Math.max(0,s-1))} onEnd={endTour} onTabChange={t=>setTab(t)}/>}
         {tab==="grades"&&<PortalGradesTab stu={stu} subs={subs} mdn={mdn} state={state}/>}
         {tab==="attendance"&&<PortalAttendance stu={stu} att={att} state={state}/>}
         {tab==="calendar"&&<PortalEventsTab stu={stu} state={state} upd={upd} user={user} isMobile={isMobile}/>}

@@ -220,6 +220,14 @@ body{background:var(--bg);color:var(--t1);min-height:100vh;}
 .tt th{text-align:left;padding:7px 10px;background:#f8fafc;border-bottom:2px solid rgba(0,0,0,0.12);font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:#475569;}
 .tt td{padding:7px 10px;border-bottom:1px solid rgba(0,0,0,0.06);color:#0f172a;}
 
+/* The teacher shell on a phone. 100vh on iOS Safari is the height the page
+   would have if the browser chrome were hidden, so a 100vh column pushes its
+   bottom nav below the visible area until the toolbar happens to collapse —
+   which is why the nav only appeared after scrolling and tugging at the end of
+   the page. dvh tracks the height actually on screen; the vh line stays as a
+   fallback for browsers without dvh, which must not be left with no height. */
+.mshell{display:flex;flex-direction:column;height:100vh;height:100dvh;background:var(--bg);overflow:hidden;}
+
 /* PORTAL */
 .psh{min-height:100vh;min-height:100dvh;background:var(--bg);}
 .phdr{
@@ -4515,72 +4523,85 @@ body{background:var(--bg);color:var(--t1);min-height:100vh;}
 const TEACHER_TOUR = [{
   tab: "dashboard",
   title: "📊 Dashboard",
-  body: "Your home base. See upcoming assignments due this week, attendance warnings, Iowa compliance alerts, and quick stats for all students."
+  body: "What needs you today: work that is past due and still ungraded, whether attendance has been marked, permission slips nobody has answered, and how many days are left in the quarter. Below that, upcoming events and the grading queue."
 }, {
   tab: "students",
   title: "👥 Students",
-  body: "Add and manage students here. Assign subjects, set grade levels, and link parent accounts. Click a student to see their full profile and subjects."
+  body: "The roster. Click a student to open their profile, set their grade level, and manage their subjects. Students are added over in Accounts — that is also where you link a parent to them."
 }, {
   tab: "gradebook",
   title: "📊 Gradebook",
-  body: "Select a student then enter grades per assignment. Use the View selector to see grades by quarter or as a projected final. Add subjects and assignments with the + buttons."
+  body: "Pick a student, then a subject, then enter a score on each assignment. + Assignment opens a form that spells out what each field does, including which date decides the quarter. Export All to Excel gives you the whole class in one workbook."
 }, {
   tab: "gradebook",
   title: "📅 Quarter View",
-  body: "The View dropdown lets you switch between quarters. Projected Final weights all quarters with grades equally — matching what will appear on the transcript when all quarters close."
+  body: "The View dropdown switches between quarters. Projected Final weights all quarters that have grades equally — the same figure that reaches the transcript once every quarter is closed."
 }, {
   tab: "attendance",
   title: "📅 Attendance",
-  body: "Mark daily attendance as Present, Absent, Excused, or Tardy. Upload excuse documents with 📎. Generate monthly Iowa compliance reports with 📋."
+  body: "Mark each day Present, Absent, Excused, or Tardy. Attach an excuse document with 📎. 📋 generates the monthly Iowa compliance report."
 }, {
   tab: "behavior",
   title: "⭐ Behavior",
-  body: "For MDN students: rate behavior 1–5 stars. For letter grade students: log incidents with descriptions. Both show a history log per student."
+  body: "Students on the MDN scale get a 1–5 star rating. Students on letter grades get written incident entries. Both keep a dated history."
 }, {
   tab: "notes",
   title: "📝 Notes",
-  body: "Record strengths and areas for improvement per student. These notes appear on progress reports for parent-teacher conferences."
+  body: "Strengths and areas to work on, per student. These carry through onto progress reports for conferences."
 }, {
   tab: "events",
   title: "🗓️ Events",
-  body: "Create school events with optional permission slips. Toggle 📚 Assignments and 📅 Attendance on the calendar. Quarter boundaries are marked automatically."
+  body: "Create events, and tick Permission Slip when you need a parent's answer. Families see pending slips beside their calendar and can change their answer later. Quarter boundaries appear on the calendar automatically."
 }, {
   tab: "reports",
   title: "📋 Progress Reports",
-  body: "Generate reports for any date range. Multiple periods show a comparison bar chart and a grade trajectory line graph showing how grades moved over time."
+  body: "Reports for any date range you choose. Add more than one period to get a comparison bar chart and a trajectory line showing how grades moved."
 }, {
   tab: "reports",
   title: "📋 Transcripts",
-  body: "Generate official transcripts per student. Quarterly grade columns populate as quarters are finalized. Final grade only appears once all assigned quarters are closed."
-}, {
-  tab: "settings",
-  title: "⚙️ Settings",
-  body: "Configure school year dates, quarter dates (use ⟳ Auto-Calculate to divide evenly), grading scale, hours per day, and minimum hours. Finalize quarters here to lock grades."
+  body: "Official transcripts per student. Quarter columns fill in as you finalize quarters, and the final grade appears once every assigned quarter is closed."
 }, {
   tab: "accounts",
   title: "👤 Accounts",
-  body: "Create parent and student login accounts. Parents see their child's grades, upcoming assignments, events, and can use the grade calculator from their portal."
+  body: "Everything to do with people. Add a student to the roster with or without a login, create the login later, and link parents — a parent can be linked to several children. Admins can also create other teacher and admin accounts here."
+}, {
+  tab: "activity",
+  title: "📜 Activity",
+  body: "Who changed what, and when. Every edit, account change, and restore is recorded. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."
+}, {
+  tab: "settings",
+  title: "⚙️ Settings",
+  body: "School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar."
+}, {
+  tab: "settings",
+  title: "💾 Restore Points & Year End",
+  body: "A full copy is saved each time a teacher or admin signs in, and the three newest are kept — restore one to undo a bad afternoon. Promote Students, further down, closes out the year: it archives everyone to their transcript first, then moves them up a grade."
 }];
+const PORTAL_SWITCH_STEP = {
+  tab: "calendar",
+  title: "👨‍👩‍👧 Your children",
+  body: "The buttons at the top switch between your children — everything on the page follows your choice. An amber number on a name means that child has a permission slip still waiting on you."
+};
 const PORTAL_TOUR = [{
   tab: "calendar",
   title: "🗓️ Calendar",
-  body: "Your home screen shows upcoming events, assignment due dates, and quarter boundaries. Assignments are shown by default — click any item for details."
+  body: "Your home screen: upcoming events, assignment due dates, and quarter boundaries. Permission slips waiting on you sit to the side — you'll be asked to confirm before anything is sent, and you can change your answer afterwards."
 }, {
   tab: "grades",
   title: "📊 Grades",
-  body: "See current grades and averages per subject. Use the Grade Calculator (🎯) to see what score you need to reach your target — by quarter or for the final grade."
+  body: "Current grade and average for each subject. Open a subject to see the individual assignments. The Grade Calculator (🎯) works out what score is still needed to reach a target, by quarter or for the final grade."
 }, {
   tab: "attendance",
   title: "📅 Attendance",
-  body: "View your full attendance record — present, absent, excused, and tardy days — with total hours attended shown for Iowa compliance."
+  body: "The full attendance record — present, absent, excused, and tardy — with total hours attended for Iowa's requirements."
 }, {
   tab: "notes",
   title: "📝 Notes",
-  body: "Your teacher's notes on your strengths and areas to work on. These come from progress report conferences."
+  body: "Your teacher's notes on strengths and areas to work on. These are the same notes used at progress report conferences."
 }, {
   tab: "history",
   title: "📚 History",
-  body: "Past school years appear here after year-end promotion. Official transcripts can be requested from your teacher."
+  body: "Past school years appear here once the year has been closed out. Ask your teacher if you need an official transcript."
 }];
 function TourOverlay({
   steps,
@@ -4933,13 +4954,7 @@ function TeacherApp({
   const pinnedIds = state.sy?.pinnedNav || ["dashboard", "students", "gradebook", "attendance"];
   const nav = [...pinnedIds.map(id => ALL_NAV_ITEMS.find(n => n.id === id)).filter(Boolean), ...ALL_NAV_ITEMS.filter(n => !pinnedIds.includes(n.id))];
   return isMobile ? React.createElement("div", {
-    style: {
-      display: "flex",
-      flexDirection: "column",
-      height: "100vh",
-      background: "var(--bg)",
-      overflow: "hidden"
-    }
+    className: "mshell"
   }, React.createElement("div", {
     style: {
       background: "var(--c1)",
@@ -5055,7 +5070,7 @@ function TeacherApp({
   }, React.createElement("div", {
     style: {
       position: "absolute",
-      bottom: 60,
+      bottom: "calc(60px + env(safe-area-inset-bottom,0px))",
       left: 0,
       right: 0,
       background: "var(--c1)",
@@ -5211,7 +5226,7 @@ function TeacherApp({
       fontSize: 10
     },
     onClick: () => startTour(tab)
-  }, "? Tour")), React.createElement("button", {
+  }, "Tour")), React.createElement("button", {
     className: "logobtn",
     onClick: logout
   }, "Sign Out"))), React.createElement("main", {
@@ -12167,6 +12182,88 @@ function Accounts({
     }, "last admin")));
   })));
 }
+function ActivityLog({
+  state
+}) {
+  const [q, setQ] = useState("");
+  const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const entries = (state.auditLog || []).filter(e => e && (e.ts || 0) >= cutoff).sort((a, b) => (b.ts || 0) - (a.ts || 0));
+  const ql = q.trim().toLowerCase();
+  const filtered = ql ? entries.filter(e => ((e.actorName || "") + " " + (e.detail || "") + " " + (e.action || "")).toLowerCase().includes(ql)) : entries;
+  const icon = r => r === "admin" ? "🛡️" : r === "teacher" ? "🎓" : r === "parent" ? "👨‍👩‍👧" : r === "student" ? "🧒" : "•";
+  return React.createElement("div", {
+    className: "pg"
+  }, React.createElement("div", {
+    className: "ph"
+  }, React.createElement("div", {
+    className: "ptit"
+  }, "Activity Log")), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--t3)",
+      marginBottom: 12
+    }
+  }, "Who changed what, and when. Entries are kept for 30 days, then removed automatically. Visible to teachers and admins only."), React.createElement("input", {
+    className: "inp",
+    placeholder: "Search by person or action\u2026",
+    value: q,
+    onChange: e => setQ(e.target.value),
+    style: {
+      maxWidth: 340,
+      marginBottom: 14
+    }
+  }), !filtered.length && React.createElement("p", {
+    className: "emp"
+  }, entries.length ? "No activity matches your search." : "No activity recorded in the last 30 days."), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, filtered.map(e => React.createElement("div", {
+    key: e.id,
+    className: "card",
+    style: {
+      display: "flex",
+      gap: 12,
+      alignItems: "flex-start",
+      padding: "9px 12px"
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 16,
+      lineHeight: "18px"
+    }
+  }, icon(e.actorRole)), React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600
+    }
+  }, e.actorName || "Unknown", " ", React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "var(--t3)",
+      fontWeight: 400
+    }
+  }, "\xB7 ", e.actorRole || "—")), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "var(--t2)",
+      wordBreak: "break-word"
+    }
+  }, e.detail || e.action || "—")), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "var(--t3)",
+      whiteSpace: "nowrap"
+    }
+  }, new Date(e.ts).toLocaleString())))));
+}
 function PwChecklist({
   pw,
   email
@@ -15337,6 +15434,7 @@ function Portal({
   const myStudentIds = getStudentIdsForUser(user);
   const myStudents = state.students.filter(s => myStudentIds.includes(s.id));
   const stu = myStudents.find(s => s.id === selectedStuId) || myStudents[0];
+  const portalTourSteps = myStudents.length > 1 ? [PORTAL_SWITCH_STEP, ...PORTAL_TOUR] : PORTAL_TOUR;
   const pendingSlipsFor = sid => (state.events || []).filter(e => {
     if (!e.permissionSlip || !(e.assignedStudents || []).includes(sid)) return false;
     if (e.endDate && e.endDate < today()) return false;
@@ -15477,7 +15575,7 @@ function Portal({
       fontFamily: "inherit"
     },
     onClick: () => setTourStep(0)
-  }, "? Tour"), React.createElement("button", {
+  }, "Tour"), React.createElement("button", {
     style: {
       fontSize: 11,
       padding: "5px 10px",
@@ -15592,7 +15690,7 @@ function Portal({
   }, "Update Password")), React.createElement(MfaSection, null))), React.createElement("div", {
     className: "pcont"
   }, tourStep >= 0 && React.createElement(TourOverlay, {
-    steps: PORTAL_TOUR,
+    steps: portalTourSteps,
     stepIdx: tourStep,
     onNext: () => setTourStep(s => s + 1),
     onBack: () => setTourStep(s => Math.max(0, s - 1)),
