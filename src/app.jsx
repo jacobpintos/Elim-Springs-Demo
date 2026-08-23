@@ -5795,7 +5795,17 @@ function Portal({state,upd,user,logout,isMobile}) {
   const [selectedStuId,setSelectedStuId]=useState(null);
   const myStudentIds=getStudentIdsForUser(user);
   const myStudents=state.students.filter(s=>myStudentIds.includes(s.id));
-  const stu=selectedStuId?state.students.find(s=>s.id===selectedStuId):myStudents[0];
+  // Scoped to this family's own children, and falls back to the first if the
+  // selected one leaves the roster (graduates, transfers) mid-session.
+  const stu=myStudents.find(s=>s.id===selectedStuId)||myStudents[0];
+  // Slips waiting on this parent for a child other than the one on screen would
+  // otherwise be invisible, so the switcher carries the count.
+  const pendingSlipsFor=sid=>(state.events||[]).filter(e=>{
+    if(!e.permissionSlip||!(e.assignedStudents||[]).includes(sid)) return false;
+    if(e.endDate&&e.endDate<today()) return false;
+    const r=(e.responses||{})[sid];
+    return !(typeof r==="string"?r:(r||{}).status);
+  }).length;
   if(!stu) return (
     <div className="psh">
       <div className="phdr"><span>🏫 Empower Iowa - Elim Springs Campus Portal</span><button className="bg" onClick={logout}>Sign Out</button></div>
@@ -5810,12 +5820,37 @@ function Portal({state,upd,user,logout,isMobile}) {
   return (
     <div className="psh">
       <div className="phdr">
-        <div style={{display:"flex",alignItems:"center",gap:10}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
           <div style={{width:36,height:36,borderRadius:"50%",background:"linear-gradient(135deg,var(--acc),var(--pur))",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,fontWeight:700,color:"#0a0e1a",flexShrink:0}}>{stu.name[0]}</div>
           <div>
             <div style={{fontSize:14,fontWeight:700,color:"#f1f5f9"}}>{stu.name}</div>
             <div style={{fontSize:10,color:"#94a3b8"}}>{stu.gradeLevel} · Empower Iowa</div>
           </div>
+          {/* Families with more than one child had no way to reach the others:
+              the portal always rendered myStudents[0]. */}
+          {myStudents.length>1&&<div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{fontSize:10,color:"#94a3b8",marginLeft:4}}>Viewing</span>
+            {myStudents.map(s=>{
+              const on=s.id===stu.id;
+              const waiting=pendingSlipsFor(s.id);
+              return (
+                <button key={s.id} onClick={()=>setSelectedStuId(s.id)}
+                  aria-pressed={on}
+                  title={s.name+" · "+s.gradeLevel+(waiting?" · "+waiting+" permission slip"+(waiting===1?"":"s")+" to answer":"")}
+                  style={{fontSize:11,padding:"5px 12px",borderRadius:20,cursor:"pointer",fontFamily:"inherit",
+                    display:"flex",alignItems:"center",gap:6,
+                    fontWeight:on?700:500,
+                    background:on?"#f1f5f9":"rgba(255,255,255,0.1)",
+                    color:on?"#1e293b":"#e2e8f0",
+                    border:"1px solid "+(on?"#f1f5f9":"rgba(255,255,255,0.25)")}}>
+                  {s.name.split(" ")[0]}
+                  {waiting>0&&<span style={{background:"var(--yel)",color:"#fff",borderRadius:20,
+                    minWidth:16,height:16,display:"inline-flex",alignItems:"center",justifyContent:"center",
+                    fontSize:9,fontWeight:700,padding:"0 4px"}}>{waiting}</span>}
+                </button>
+              );
+            })}
+          </div>}
         </div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
           {[["grades","Grades"],["calendar","Calendar"],["attendance","Attendance"],["notes","Notes"],["history","History"]].map(([t,l])=>(

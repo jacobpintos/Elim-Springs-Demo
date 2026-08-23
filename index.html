@@ -15336,7 +15336,13 @@ function Portal({
   const [selectedStuId, setSelectedStuId] = useState(null);
   const myStudentIds = getStudentIdsForUser(user);
   const myStudents = state.students.filter(s => myStudentIds.includes(s.id));
-  const stu = selectedStuId ? state.students.find(s => s.id === selectedStuId) : myStudents[0];
+  const stu = myStudents.find(s => s.id === selectedStuId) || myStudents[0];
+  const pendingSlipsFor = sid => (state.events || []).filter(e => {
+    if (!e.permissionSlip || !(e.assignedStudents || []).includes(sid)) return false;
+    if (e.endDate && e.endDate < today()) return false;
+    const r = (e.responses || {})[sid];
+    return !(typeof r === "string" ? r : (r || {}).status);
+  }).length;
   if (!stu) return React.createElement("div", {
     className: "psh"
   }, React.createElement("div", {
@@ -15370,7 +15376,8 @@ function Portal({
     style: {
       display: "flex",
       alignItems: "center",
-      gap: 10
+      gap: 10,
+      flexWrap: "wrap"
     }
   }, React.createElement("div", {
     style: {
@@ -15397,7 +15404,57 @@ function Portal({
       fontSize: 10,
       color: "#94a3b8"
     }
-  }, stu.gradeLevel, " \xB7 Empower Iowa"))), React.createElement("div", {
+  }, stu.gradeLevel, " \xB7 Empower Iowa")), myStudents.length > 1 && React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6,
+      flexWrap: "wrap"
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 10,
+      color: "#94a3b8",
+      marginLeft: 4
+    }
+  }, "Viewing"), myStudents.map(s => {
+    const on = s.id === stu.id;
+    const waiting = pendingSlipsFor(s.id);
+    return React.createElement("button", {
+      key: s.id,
+      onClick: () => setSelectedStuId(s.id),
+      "aria-pressed": on,
+      title: s.name + " · " + s.gradeLevel + (waiting ? " · " + waiting + " permission slip" + (waiting === 1 ? "" : "s") + " to answer" : ""),
+      style: {
+        fontSize: 11,
+        padding: "5px 12px",
+        borderRadius: 20,
+        cursor: "pointer",
+        fontFamily: "inherit",
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        fontWeight: on ? 700 : 500,
+        background: on ? "#f1f5f9" : "rgba(255,255,255,0.1)",
+        color: on ? "#1e293b" : "#e2e8f0",
+        border: "1px solid " + (on ? "#f1f5f9" : "rgba(255,255,255,0.25)")
+      }
+    }, s.name.split(" ")[0], waiting > 0 && React.createElement("span", {
+      style: {
+        background: "var(--yel)",
+        color: "#fff",
+        borderRadius: 20,
+        minWidth: 16,
+        height: 16,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        fontSize: 9,
+        fontWeight: 700,
+        padding: "0 4px"
+      }
+    }, waiting));
+  }))), React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
