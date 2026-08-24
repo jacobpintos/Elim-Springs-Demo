@@ -1040,15 +1040,28 @@ window._exportSheets=function(filename, sheets){
       if(sh.merges) ws["!merges"]=sh.merges;
       var range=XLSX.utils.decode_range(ws["!ref"]||"A1");
       function cell(r,c){ var ref=XLSX.utils.encode_cell({r:r,c:c}); if(!ws[ref]) ws[ref]={t:"s",v:""}; return ws[ref]; }
-      (sh.titleRows||[]).forEach(function(r,idx){ cell(r,0).s=idx===0?XL_TITLE:XL_SUB; });
+      // Every cell gets its OWN style object. Assigning the shared XL_CELL /
+      // XL_BANDED constants by reference used to be enough — until a number
+      // format was applied to one cell: the writer resolves the format onto the
+      // style it finds there, so a single "0%" on the Percent column leaked
+      // into every other numeric cell and printed 88 as "8800%".
+      function styled(r,c,base){ var cl=cell(r,c); cl.s=Object.assign({},base); return cl; }
+      (sh.titleRows||[]).forEach(function(r,idx){ styled(r,0,idx===0?XL_TITLE:XL_SUB); });
       var banded={}; (sh.bands||[]).forEach(function(r){ banded[r]=true; });
       if(typeof sh.headerRow==="number"){
-        for(var c=range.s.c;c<=range.e.c;c++) cell(sh.headerRow,c).s=XL_HEADER;
+        for(var c=range.s.c;c<=range.e.c;c++) styled(sh.headerRow,c,XL_HEADER);
         for(var r=sh.headerRow+1;r<=range.e.r;r++)
-          for(var c2=range.s.c;c2<=range.e.c;c2++) cell(r,c2).s=banded[r]?XL_BANDED:XL_CELL;
+          for(var c2=range.s.c;c2<=range.e.c;c2++) styled(r,c2,banded[r]?XL_BANDED:XL_CELL);
         ws["!autofilter"]={ref:XLSX.utils.encode_range({s:{r:sh.headerRow,c:range.s.c},e:{r:range.e.r,c:range.e.c}})};
       }
-      (sh.formats||[]).forEach(function(f){ var cl=cell(f.r,f.c); if(typeof cl.v==="number") cl.z=f.z; });
+      // Number formats go on the cell's own style as well as its z, so nothing
+      // has to be inferred from a style shared with its neighbours.
+      (sh.formats||[]).forEach(function(f){
+        var cl=cell(f.r,f.c);
+        if(typeof cl.v!=="number") return;
+        cl.z=f.z;
+        cl.s=Object.assign({},cl.s||{},{numFmt:f.z});
+      });
       XLSX.utils.book_append_sheet(wb, ws, _safeSheetName(sh.name||("Sheet"+(i+1))));
     });
     XLSX.writeFile(wb, filename);
