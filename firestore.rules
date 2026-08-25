@@ -11,9 +11,11 @@ rules_version = '2';
 //
 //   users/{uid}           One login record per Firebase Auth user. Fields:
 //                         role ("admin" | "teacher" | "parent" | "student"),
-//                         name, email, studentIds[], classIds[]. A user may read
-//                         only their own record; staff read all. Role is never
-//                         self-settable. Only admins may create/modify
+//                         name, email, studentIds[], classIds[], suspended. A
+//                         user may read only their own record; staff read all.
+//                         Role is never self-settable. A removed account is
+//                         suspended rather than deleted (so the removal can be
+//                         undone): the record survives but grants nothing. Only admins may create/modify
 //                         teacher/admin records; teachers may create/modify only
 //                         parent/student records.
 //
@@ -66,8 +68,20 @@ service cloud.firestore {
       return /databases/$(database)/documents/schools/$(school)/users/$(request.auth.uid);
     }
 
+    function userRec(school) {
+      return get(userDocPath(school)).data;
+    }
+
+    // A removed account is suspended, not deleted: the record and the sign-in
+    // survive so the removal can be undone, but they grant nothing meanwhile.
+    function suspended(school) {
+      return signedIn()
+        && exists(userDocPath(school))
+        && userRec(school).get('suspended', false) == true;
+    }
+
     function roleOf(school) {
-      return exists(userDocPath(school)) ? get(userDocPath(school)).data.role : '';
+      return (exists(userDocPath(school)) && !suspended(school)) ? userRec(school).role : '';
     }
 
     // Admin: bootstrap email or a user record with role "admin".
@@ -81,8 +95,9 @@ service cloud.firestore {
     }
 
     // Is the requester on a document's allow list (portals / responses).
-    function isLinked(rsc) {
+    function isLinked(school, rsc) {
       return signedIn()
+        && !suspended(school)
         && rsc.data.allowedUids is list
         && request.auth.uid in rsc.data.allowedUids;
     }
@@ -125,7 +140,7 @@ service cloud.firestore {
 
       // Per-student portal view models. Read by staff or linked users; staff-write.
       match /portals/{studentId} {
-        allow read: if isStaff(school) || isLinked(resource);
+        allow read: if isStaff(school) || isLinked(school, resource);
         allow write: if isStaff(school);
       }
 
@@ -138,11 +153,11 @@ service cloud.firestore {
       // Per-student permission-slip responses. Staff create/manage the allow
       // list. A linked user may update ONLY the "slips" field.
       match /responses/{studentId} {
-        allow read: if isStaff(school) || isLinked(resource);
+        allow read: if isStaff(school) || isLinked(school, resource);
         allow create, delete: if isStaff(school);
         allow update: if isStaff(school)
           || (
-            isLinked(resource)
+            isLinked(school, resource)
             && request.resource.data.allowedUids == resource.data.allowedUids
             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['slips'])
           );

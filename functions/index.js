@@ -59,8 +59,75 @@ async function adminUids() {
 }
 
 /**
- * Delete ONE account: its Firebase Auth sign-in and its role record.
- * Refuses to remove the caller, or the last remaining admin.
+ * Throws unless the caller may manage this account: an admin may manage anyone,
+ * a teacher only parent/student accounts (mirrors firestore.rules).
+ */
+async function assertCanManage(request, uid) {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  if (isBootstrapEmail(request.auth.token && request.auth.token.email)) return;
+  const mine = await roleOf(request.auth.uid);
+  if (mine === "admin") return;
+  if (mine === "teacher") {
+    const theirs = await roleOf(uid);
+    if (theirs === "parent" || theirs === "student") return;
+  }
+  throw new HttpsError("permission-denied", "You cannot manage this account.");
+}
+
+/**
+ * Suspend or restore ONE account.
+ *
+ * Removing someone in the app suspends them rather than destroying the login:
+ * the Firebase Auth sign-in is disabled and the role record is flagged, so an
+ * accidental removal can be undone and that parent signs back in with the
+ * password they already had. Deleting for good is deleteAccount, below.
+ */
+exports.setAccountAccess = onCall(OPTS, async (request) => {
+  const uid = String((request.data && request.data.uid) || "");
+  const suspended = !!(request.data && request.data.suspended);
+  if (!uid) {
+    throw new HttpsError("invalid-argument", "uid is required.");
+  }
+  await assertCanManage(request, uid);
+  if (uid === request.auth.uid) {
+    throw new HttpsError("failed-precondition", "You cannot suspend your own account.");
+  }
+
+  if (suspended && (await roleOf(uid)) === "admin") {
+    const admins = await adminUids();
+    if (admins.size <= 1) {
+      throw new HttpsError(
+        "failed-precondition",
+        "This is the last admin account. Create another admin first."
+      );
+    }
+  }
+
+  let authUpdated = true;
+  try {
+    await admin.auth().updateUser(uid, { disabled: suspended });
+  } catch (e) {
+    if (e && e.code === "auth/user-not-found") {
+      authUpdated = false; // record without a login; the flag below still applies
+    } else {
+      throw new HttpsError("internal", (e && e.message) || "Auth update failed.");
+    }
+  }
+
+  await userDoc(uid).set(
+    { suspended, suspendedAt: suspended ? Date.now() : null },
+    { merge: true }
+  );
+
+  return { ok: true, uid, suspended, authUpdated };
+});
+
+/**
+ * Delete ONE account for good: its Firebase Auth sign-in and its role record.
+ * Refuses to remove the caller, or the last remaining admin. This cannot be
+ * undone — the app uses setAccountAccess for ordinary removals.
  */
 exports.deleteAccount = onCall(OPTS, async (request) => {
   await assertAdmin(request);
