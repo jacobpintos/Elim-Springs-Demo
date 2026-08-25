@@ -20,9 +20,15 @@
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
 const { onSchedule } = require("firebase-functions/v2/scheduler");
-const admin = require("firebase-admin");
+// firebase-admin v13+ dropped the old namespaced API — the root export carries
+// only the app functions, and auth/firestore come from subpath imports. Calling
+// the removed `admin.auth()` fails at runtime with "admin.auth is not a
+// function", which is exactly what the deployed functions used to do.
+const { initializeApp } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
+const { getFirestore } = require("firebase-admin/firestore");
 
-admin.initializeApp();
+initializeApp();
 
 const SCHOOL_ID = "elim-springs";
 
@@ -43,7 +49,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 const AUDIT_DAYS = 30;
 const AUDIT_MAX = 2000;
 
-const db = () => admin.firestore();
+const db = () => getFirestore();
 const userDoc = (uid) => db().doc(`schools/${SCHOOL_ID}/users/${uid}`);
 const usersCol = () => db().collection(`schools/${SCHOOL_ID}/users`);
 
@@ -160,7 +166,7 @@ exports.createAccount = onCall(OPTS, async (request) => {
 
   let user;
   try {
-    user = await admin.auth().createUser({
+    user = await getAuth().createUser({
       email,
       password,
       displayName: name || undefined,
@@ -189,7 +195,7 @@ exports.createAccount = onCall(OPTS, async (request) => {
     });
   } catch (e) {
     // Never leave a sign-in behind that no role record accounts for.
-    await admin.auth().deleteUser(user.uid).catch(() => {});
+    await getAuth().deleteUser(user.uid).catch(() => {});
     throw new HttpsError("internal", "Created the sign-in but could not save the account; nothing was kept.");
   }
 
@@ -227,7 +233,7 @@ exports.setAccountAccess = onCall(OPTS, async (request) => {
 
   let authUpdated = true;
   try {
-    await admin.auth().updateUser(uid, { disabled: suspended });
+    await getAuth().updateUser(uid, { disabled: suspended });
   } catch (e) {
     if (e && e.code === "auth/user-not-found") {
       authUpdated = false; // record without a login; the flag below still applies
@@ -276,7 +282,7 @@ exports.deleteAccount = onCall(OPTS, async (request) => {
 
   let authDeleted = true;
   try {
-    await admin.auth().deleteUser(uid);
+    await getAuth().deleteUser(uid);
   } catch (e) {
     if (e && e.code === "auth/user-not-found") {
       authDeleted = false; // record existed without a login; nothing to remove
@@ -302,7 +308,7 @@ exports.purgeNonAdminAuth = onCall(OPTS, async (request) => {
   const all = [];
   let pageToken;
   do {
-    const page = await admin.auth().listUsers(1000, pageToken);
+    const page = await getAuth().listUsers(1000, pageToken);
     all.push(...page.users);
     pageToken = page.pageToken;
   } while (pageToken);
@@ -313,7 +319,7 @@ exports.purgeNonAdminAuth = onCall(OPTS, async (request) => {
   const failed = [];
   for (const u of doomed) {
     try {
-      await admin.auth().deleteUser(u.uid);
+      await getAuth().deleteUser(u.uid);
       deleted.push(u.email || u.uid);
     } catch (e) {
       failed.push(u.email || u.uid);
@@ -397,7 +403,7 @@ exports.purgeSuspendedAccounts = onSchedule(
       if (since > cutoff) continue;
 
       try {
-        await admin.auth().deleteUser(doc.id);
+        await getAuth().deleteUser(doc.id);
       } catch (e) {
         if (!e || e.code !== "auth/user-not-found") {
           // Leave the record alone so the next run tries again, rather than
