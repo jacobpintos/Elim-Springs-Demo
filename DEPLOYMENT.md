@@ -444,8 +444,9 @@ callable functions in `functions/index.js` close that gap:
 | `setAccountAccess` | Accounts → **Remove** / **Restore** | Disables or re-enables that user's Auth sign-in and flags the role record `suspended`. Refuses to suspend you, or the last admin. |
 | `deleteAccount` | Accounts → **Delete forever** | Deletes that user's Auth sign-in *and* their role record, permanently. Refuses to delete you, or the last admin. |
 | `purgeNonAdminAuth` | Settings → **Clear All Data** | Deletes every non-admin sign-in. Admin accounts, bootstrap admin emails, and the caller are always kept. |
+| `purgeSuspendedAccounts` | Cloud Scheduler, daily | Deletes accounts left removed for more than 90 days — sign-in and role record. Not callable from the app. |
 
-All three re-check server-side who the caller is — the client's claim is never
+The three callables re-check server-side who the caller is — the client's claim is never
 trusted. `deleteAccount` and `purgeNonAdminAuth` are admin-only;
 `setAccountAccess` follows the same rule as the app and the security rules: an
 admin may manage anyone, a teacher only parent/student accounts.
@@ -466,6 +467,34 @@ and is genuinely permanent — no undo, and no restore point will bring it back.
 Without the Cloud Functions deployed, removal still sets the flag on the role
 record, which blocks the app and the rules; the Auth sign-in itself just stays
 enabled until you deploy them.
+
+### Retention: removed accounts don't sit there forever
+
+A suspension that never expires would keep a former family's name, email and
+student links in the database indefinitely — recoverable is good, permanent is
+not. `purgeSuspendedAccounts` runs daily at 03:15 America/Chicago and deletes,
+for good, every account suspended more than **`SUSPENDED_RETENTION_DAYS`** (90)
+ago: the Firebase Auth sign-in and the `users/{uid}` record both go, and the
+deletion is written to the activity log as *Retention schedule · system*, so
+staff can see it happened.
+
+- Change the window with `SUSPENDED_RETENTION_DAYS` at the top of
+  `functions/index.js`. The Accounts screen counts down to the same number —
+  `RETENTION_DAYS` in `src/app.jsx` — so change both, then `npm run build`.
+- A founding admin email is never auto-deleted.
+- A suspended record with no `suspendedAt` (suspended before this rule existed,
+  or by the offline fallback path) has its clock started on the next run rather
+  than being deleted on the strength of a missing field — so the first 90 days
+  after deploying this, nothing older is swept up by surprise.
+- If deleting the Auth sign-in fails, the role record is left in place and the
+  next run tries again — better a lingering record than a deleted record whose
+  sign-in still works.
+- The rule needs **Cloud Scheduler** enabled on the project (it comes with the
+  Blaze plan); `firebase deploy --only functions` sets up the job.
+
+Once an account is auto-deleted the removal is no longer recoverable — a restore
+point can rewrite the role record, but the sign-in itself is gone, so the family
+would need a fresh account and a new password.
 
 ### Deploy
 

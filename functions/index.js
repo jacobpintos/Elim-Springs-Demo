@@ -1,21 +1,25 @@
 /**
  * Cloud Functions for Empower Iowa — Elim Springs Campus.
  *
- * A web page can delete Firestore documents, but it can NOT delete another
- * person's Firebase Authentication sign-in — only the Admin SDK can. These
- * callable functions close that gap so removing an account (and "Clear All
- * Data") really removes the login, not just its role record.
+ * A web page can delete Firestore documents, but it can NOT delete or disable
+ * another person's Firebase Authentication sign-in — only the Admin SDK can.
+ * These callable functions close that gap, so removing an account (and "Clear
+ * All Data") really reaches the login, not just its role record.
  *
- * Both functions are admin-only and re-check that server-side; never trust the
- * client's own claim about who it is.
+ * Every callable re-checks server-side who is asking; the client's own claim
+ * about who it is, or what role it holds, is never trusted.
  *
- * 2nd-gen callables (firebase-functions v7). Region is pinned to us-central1
- * because the web client calls httpsCallable() without specifying a region.
+ * One scheduled function, purgeSuspendedAccounts, enforces the retention rule
+ * for removed accounts.
+ *
+ * 2nd-gen functions (firebase-functions v7). The region is pinned to
+ * us-central1 because the web client calls httpsCallable() without one.
  *
  * Deploy:  firebase deploy --only functions      (requires the Blaze plan)
  */
 
 const { onCall, HttpsError } = require("firebase-functions/v2/https");
+const { onSchedule } = require("firebase-functions/v2/scheduler");
 const admin = require("firebase-admin");
 
 admin.initializeApp();
@@ -27,6 +31,17 @@ const SCHOOL_ID = "elim-springs";
 const BOOTSTRAP_ADMIN_EMAILS = ["teacher@elimsprings.com"];
 
 const OPTS = { region: "us-central1", maxInstances: 10 };
+
+// How long a removed (suspended) account is kept before it is deleted for good.
+// Long enough for "we made a mistake" or "they're coming back in the fall",
+// short enough that a family who has left doesn't sit in the database forever.
+// Keep in sync with the note on the Accounts screen in index.html.
+const SUSPENDED_RETENTION_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+// Mirrors the client's activity-log retention (index.html).
+const AUDIT_DAYS = 30;
+const AUDIT_MAX = 2000;
 
 const db = () => admin.firestore();
 const userDoc = (uid) => db().doc(`schools/${SCHOOL_ID}/users/${uid}`);
@@ -203,3 +218,101 @@ exports.purgeNonAdminAuth = onCall(OPTS, async (request) => {
 
   return { ok: true, deleted: deleted.length, emails: deleted, failed };
 });
+
+/**
+ * Write an entry into the staff activity log (state/main → auditLog).
+ *
+ * Anything this backend does to someone's account has to show up where staff
+ * look for it, credited to the schedule rather than to a person. Prunes to the
+ * same 30-day / 2000-entry window the app uses.
+ */
+async function appendAuditEntry(action, detail) {
+  const ref = db().doc(`schools/${SCHOOL_ID}/state/main`);
+  const entry = {
+    id: Date.now().toString(36) + Math.random().toString(36).slice(2, 7),
+    ts: Date.now(),
+    actorUid: null,
+    actorName: "Retention schedule",
+    actorRole: "system",
+    action,
+    detail,
+  };
+  await db().runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) return; // no gradebook yet — nothing to append to
+    const cutoff = Date.now() - AUDIT_DAYS * DAY_MS;
+    const log = ((snap.data() || {}).auditLog || [])
+      .filter((e) => e && (e.ts || 0) >= cutoff)
+      .concat([entry])
+      .slice(-AUDIT_MAX);
+    tx.set(ref, { auditLog: log }, { merge: true });
+  });
+}
+
+/**
+ * Retention rule for removed accounts.
+ *
+ * Removing someone suspends their account rather than deleting it, so the
+ * mistake case is recoverable — but a suspended record would otherwise keep a
+ * former family's name, email and student links in the database indefinitely.
+ * Once a day, this deletes every account that has been suspended for more than
+ * SUSPENDED_RETENTION_DAYS: the Firebase Auth sign-in and the role record both
+ * go, and the deletion is recorded in the activity log.
+ *
+ * Two accounts are never touched: a founding admin email (you can't lock
+ * yourself out of your own school), and a record whose suspension has no
+ * timestamp — that one gets a timestamp instead, so its clock starts now
+ * rather than the deletion happening on the strength of a missing field.
+ *
+ * Needs Cloud Scheduler enabled on the project (it comes with the Blaze plan).
+ */
+exports.purgeSuspendedAccounts = onSchedule(
+  {
+    region: "us-central1",
+    schedule: "every day 03:15",
+    timeZone: "America/Chicago",
+    maxInstances: 1,
+  },
+  async () => {
+    const cutoff = Date.now() - SUSPENDED_RETENTION_DAYS * DAY_MS;
+    const qs = await usersCol().where("suspended", "==", true).get();
+
+    const deleted = [];
+    for (const doc of qs.docs) {
+      const rec = doc.data() || {};
+      if (isBootstrapEmail(rec.email)) continue;
+
+      const since = Number(rec.suspendedAt || 0);
+      if (!since) {
+        // Suspended before this rule existed, or by the offline fallback path:
+        // start the clock instead of deleting on the strength of a blank field.
+        await doc.ref.set({ suspendedAt: Date.now() }, { merge: true });
+        continue;
+      }
+      if (since > cutoff) continue;
+
+      try {
+        await admin.auth().deleteUser(doc.id);
+      } catch (e) {
+        if (!e || e.code !== "auth/user-not-found") {
+          // Leave the record alone so the next run tries again, rather than
+          // dropping the role record while the sign-in survives.
+          console.error(`purgeSuspendedAccounts: auth delete failed for ${doc.id}`, e);
+          continue;
+        }
+      }
+      await doc.ref.delete();
+      deleted.push(`${rec.role || "account"} ${rec.email || rec.name || doc.id}`);
+    }
+
+    if (deleted.length) {
+      await appendAuditEntry(
+        "account.purge",
+        `Deleted ${deleted.length} account${deleted.length === 1 ? "" : "s"} ` +
+          `removed more than ${SUSPENDED_RETENTION_DAYS} days ago: ${deleted.join(", ")}`
+      );
+    }
+    console.log(`purgeSuspendedAccounts: deleted ${deleted.length} of ${qs.size} suspended.`);
+    return null;
+  }
+);

@@ -1,6 +1,6 @@
 {
   "name": "elim-springs-functions",
-  "description": "Admin-only Cloud Functions for account deletion (Firebase Auth).",
+  "description": "Cloud Functions for account suspension, deletion and retention (Firebase Auth).",
   "main": "index.js",
   "engines": {
     "node": "22"

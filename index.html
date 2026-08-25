@@ -11431,6 +11431,14 @@ function Accounts({
   const adminCount = (accounts || []).filter(a => a.role === "admin" && !a.suspended).length;
   const isLastAdmin = u => u.role === "admin" && adminCount <= 1;
   const canManage = u => isAdmin || !staffRole(u.role);
+  const RETENTION_DAYS = 90;
+  const suspendedNote = u => {
+    if (!u.suspendedAt) return "Removed — sign-in suspended, can be restored";
+    const days = Math.floor((Date.now() - u.suspendedAt) / 86400000);
+    const left = RETENTION_DAYS - days;
+    const when = days <= 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
+    return "Removed " + when + " — restorable for " + (left > 1 ? left + " more days" : "one more day") + ", then deleted for good";
+  };
   const roleBadge = r => ({
     admin: "🛡️ Admin",
     teacher: "🎓 Teacher",
@@ -11631,7 +11639,7 @@ function Accounts({
       color: "var(--t3)",
       marginBottom: 14
     }
-  }, isAdmin ? "As an admin you can create admins, teachers, parents, and students." : "You can create parent and student accounts. Ask an admin to add teachers.", " A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication. Removing an account suspends its sign-in \u2014 restore it here, undo it from the activity log, or roll it back with a restore point; passwords survive either way."), ok && React.createElement("div", {
+  }, isAdmin ? "As an admin you can create admins, teachers, parents, and students." : "You can create parent and student accounts. Ask an admin to add teachers.", " A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication. Removing an account suspends its sign-in \u2014 restore it here, undo it from the activity log, or roll it back with a restore point; passwords survive either way. An account left removed for 90 days is then deleted for good, automatically."), ok && React.createElement("div", {
     style: {
       background: "rgba(74,222,128,0.1)",
       border: "1px solid rgba(74,222,128,0.3)",
@@ -12010,7 +12018,7 @@ function Accounts({
         fontSize: 10,
         color: "var(--red)"
       }
-    }, "Removed \u2014 sign-in suspended, can be restored")), React.createElement("div", {
+    }, suspendedNote(u))), React.createElement("div", {
       style: {
         display: "flex",
         gap: 5,
@@ -12057,7 +12065,7 @@ function ActivityLog({
   const entries = (state.auditLog || []).filter(e => e && (e.ts || 0) >= cutoff).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const ql = q.trim().toLowerCase();
   const filtered = ql ? entries.filter(e => ((e.actorName || "") + " " + (e.detail || "") + " " + (e.action || "")).toLowerCase().includes(ql)) : entries;
-  const icon = r => r === "admin" ? "🛡️" : r === "teacher" ? "🎓" : r === "parent" ? "👨‍👩‍👧" : r === "student" ? "🧒" : "•";
+  const icon = r => r === "admin" ? "🛡️" : r === "teacher" ? "🎓" : r === "parent" ? "👨‍👩‍👧" : r === "student" ? "🧒" : r === "system" ? "⏱️" : "•";
   const [undoTick, setUndoTick] = useState(0);
   const undoable = useMemo(() => {
     if (!window._canUndo) return null;

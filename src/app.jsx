@@ -3950,6 +3950,15 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
   const adminCount=(accounts||[]).filter(a=>a.role==="admin"&&!a.suspended).length;
   const isLastAdmin=(u)=>u.role==="admin"&&adminCount<=1;
   const canManage=(u)=>isAdmin||!staffRole(u.role);
+  // Keep in sync with SUSPENDED_RETENTION_DAYS in functions/index.js.
+  const RETENTION_DAYS=90;
+  const suspendedNote=(u)=>{
+    if(!u.suspendedAt) return "Removed — sign-in suspended, can be restored";
+    const days=Math.floor((Date.now()-u.suspendedAt)/86400000);
+    const left=RETENTION_DAYS-days;
+    const when=days<=0?"today":days===1?"yesterday":days+" days ago";
+    return "Removed "+when+" — restorable for "+(left>1?left+" more days":"one more day")+", then deleted for good";
+  };
   const roleBadge=(r)=>({admin:"🛡️ Admin",teacher:"🎓 Teacher",parent:"👨‍👩‍👧 Parent",student:"🧒 Student"}[r]||r);
 
   // Roster students that don't have a student login yet.
@@ -4055,7 +4064,7 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
       </div>
 
       <div style={{fontSize:11,color:"var(--t3)",marginBottom:14}}>
-        {isAdmin?"As an admin you can create admins, teachers, parents, and students.":"You can create parent and student accounts. Ask an admin to add teachers."} A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication. Removing an account suspends its sign-in — restore it here, undo it from the activity log, or roll it back with a restore point; passwords survive either way.
+        {isAdmin?"As an admin you can create admins, teachers, parents, and students.":"You can create parent and student accounts. Ask an admin to add teachers."} A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication. Removing an account suspends its sign-in — restore it here, undo it from the activity log, or roll it back with a restore point; passwords survive either way. An account left removed for 90 days is then deleted for good, automatically.
       </div>
       {ok&&<div style={{background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",color:"var(--grn)",borderRadius:8,padding:"9px 12px",fontSize:12,marginBottom:12}}>{ok}</div>}
 
@@ -4174,7 +4183,7 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
                 <div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name||u.email}</div>
                 <div style={{fontSize:11,color:"var(--t3)"}}>{roleBadge(u.role)} · {u.email}</div>
                 {linkedStudents.length>0&&<div style={{fontSize:10,color:"var(--acc)"}}>Linked: {linkedStudents.map(s=>s.name).join(", ")}</div>}
-                {u.suspended&&<div style={{fontSize:10,color:"var(--red)"}}>Removed — sign-in suspended, can be restored</div>}
+                {u.suspended&&<div style={{fontSize:10,color:"var(--red)"}}>{suspendedNote(u)}</div>}
               </div>
               <div style={{display:"flex",gap:5,flexDirection:"column"}}>
                 {(u.role==="parent"||u.role==="student")&&canManage(u)&&!u.suspended&&<button className="bs a" style={{fontSize:10}} onClick={()=>setEditingUser(u)}>Edit Links</button>}
@@ -4197,7 +4206,7 @@ function ActivityLog({state}){
   const entries=(state.auditLog||[]).filter(e=>e&&(e.ts||0)>=cutoff).sort((a,b)=>(b.ts||0)-(a.ts||0));
   const ql=q.trim().toLowerCase();
   const filtered=ql?entries.filter(e=>(((e.actorName||"")+" "+(e.detail||"")+" "+(e.action||"")).toLowerCase().includes(ql))):entries;
-  const icon=r=>r==="admin"?"🛡️":r==="teacher"?"🎓":r==="parent"?"👨‍👩‍👧":r==="student"?"🧒":"•";
+  const icon=r=>r==="admin"?"🛡️":r==="teacher"?"🎓":r==="parent"?"👨‍👩‍👧":r==="student"?"🧒":r==="system"?"⏱️":"•";
   // Only the newest still-undoable edit from this sign-in carries an Undo
   // button; undoing an older one would quietly throw away everything after it.
   // The tick just re-reads that after an undo, since the stack lives outside React.

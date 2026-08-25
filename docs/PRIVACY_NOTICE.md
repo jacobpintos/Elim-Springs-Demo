@@ -59,4 +59,10 @@ restrictions, an access/change log, and daily backups.
 We keep student records for **[retention period, e.g., as required by state law]**
 and securely delete them after that period.
 
+When an account is removed, its sign-in is suspended immediately — the person
+can no longer reach any records — and the account is held for **90 days** in
+case the removal was a mistake, then deleted automatically along with the name,
+email and family links it held. The internal activity log keeps entries for
+**30 days**.
+
 _Last updated: [date]._
