@@ -734,12 +734,37 @@ window._submitSlip=function(studentId,eventId,resp){
 };
 
 // ─── Account management (staff only) ────────────────────────────────────────
-// Creating a Firebase Auth account for someone else can't disturb the signed-in
-// admin/teacher, so we do it on a SECONDARY Firebase app instance, then write
-// the user's role record with the primary (staff) session and sign the
-// secondary out. A password-reset email lets the new user set their own
-// password. Firestore rules are the real guard on who may create which role.
+// Creating an account goes through the createAccount Cloud Function, which uses
+// the Admin SDK. That matters beyond tidiness: the browser-side path below
+// needs the project's public sign-up switch left on, and with it on, anyone
+// holding the (public) web API key can register themselves a login. The Admin
+// SDK bypasses that switch, so sign-up can be turned off — see DEPLOYMENT.md
+// §14. A password-reset email still lets the new user pick their own password.
 window._createAccount=function(opts){
+  var me=_appUser||{};
+  if(!_isStaffRole(me.role)) return Promise.reject(new Error("Not authorized."));
+  if(me.role!=="admin" && _isStaffRole(opts.role)) return Promise.reject(new Error("Only an admin can create teacher or admin accounts."));
+  return window._callFn("createAccount",{
+    role:opts.role, name:opts.name||"", email:opts.email, password:opts.password,
+    studentIds:opts.studentIds||[], classIds:opts.classIds||[window._defaultClassId||"main"]
+  }).then(function(res){
+    return window._auth.sendPasswordResetEmail(opts.email).catch(function(){}).then(function(){ return res&&res.uid; });
+  }).catch(function(e){
+    var code=(e&&e.code)||"";
+    // A server-side refusal is the answer, not a reason to try the old path.
+    if(code==="functions/permission-denied"||code==="functions/unauthenticated"||
+       code==="functions/invalid-argument"||code==="functions/already-exists"||
+       code==="functions/internal") throw e;
+    // Functions not deployed yet: fall back to the browser path so account
+    // creation keeps working until they are (public sign-up must stay on).
+    return _createAccountInBrowser(opts);
+  });
+};
+// Legacy path: create the sign-in on a SECONDARY Firebase app instance so the
+// signed-in admin/teacher isn't disturbed, write the role record with the
+// primary (staff) session, then sign the secondary out. Requires public sign-up
+// to be enabled on the project; superseded by the Cloud Function above.
+function _createAccountInBrowser(opts){
   return new Promise(function(resolve,reject){
     var me=_appUser||{};
     if(!_isStaffRole(me.role)) return reject(new Error("Not authorized."));
@@ -779,7 +804,7 @@ window._createAccount=function(opts){
       reject(e);
     });
   });
-};
+}
 window._updateAccountLinks=function(uid,studentIds){
   return _school().collection("users").doc(uid).set({studentIds:studentIds},{merge:true});
 };

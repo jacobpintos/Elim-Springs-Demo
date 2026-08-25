@@ -92,6 +92,111 @@ async function assertCanManage(request, uid) {
 }
 
 /**
+ * Server-side password policy. Mirrors window._pwRules in index.html — the app
+ * checks the same rules before it asks, but the client is not the guard.
+ */
+function passwordIssues(pw, email) {
+  const p = String(pw || "");
+  const issues = [];
+  if (p.length < 12) issues.push("at least 12 characters");
+  if (!/[A-Z]/.test(p)) issues.push("an uppercase letter");
+  if (!/[a-z]/.test(p)) issues.push("a lowercase letter");
+  if (!/[0-9]/.test(p)) issues.push("a number");
+  if (!/[^A-Za-z0-9]/.test(p)) issues.push("a symbol");
+  const local = String(email || "").split("@")[0].toLowerCase();
+  if (local.length >= 4 && p.toLowerCase().includes(local)) issues.push("not based on the email address");
+  const COMMON = [
+    "password", "passw0rd", "p@ssw0rd", "123456", "1234567", "12345678", "123456789",
+    "1234567890", "qwerty", "qwertyuiop", "asdfgh", "abc123", "letmein", "welcome",
+    "admin", "iloveyou", "monkey", "dragon", "football", "baseball", "000000",
+    "111111", "elimsprings", "empoweriowa", "gradebook",
+  ];
+  if (COMMON.some((b) => p.toLowerCase().includes(b))) issues.push("not a common or guessable password");
+  return issues;
+}
+
+/**
+ * Create ONE account: the Firebase Auth sign-in and its role record.
+ *
+ * This used to happen in the browser, on a second Firebase app instance, with
+ * createUserWithEmailAndPassword() — which meant the project had to leave
+ * public sign-up enabled, and anyone holding the (public) web API key could
+ * register themselves an account. Doing it here with the Admin SDK bypasses
+ * that switch, so sign-up can be turned off in the console: see DEPLOYMENT.md.
+ *
+ * An admin may create any role; a teacher only parent/student accounts — the
+ * same rule the app shows and firestore.rules enforces.
+ */
+exports.createAccount = onCall(OPTS, async (request) => {
+  if (!request.auth) {
+    throw new HttpsError("unauthenticated", "Sign in first.");
+  }
+  const data = request.data || {};
+  const role = String(data.role || "");
+  const email = String(data.email || "").trim();
+  const password = String(data.password || "");
+  const name = String(data.name || "").trim();
+
+  if (!["admin", "teacher", "parent", "student"].includes(role)) {
+    throw new HttpsError("invalid-argument", "Pick a role.");
+  }
+  if (!email) {
+    throw new HttpsError("invalid-argument", "Email is required.");
+  }
+
+  const bootstrap = isBootstrapEmail(request.auth.token && request.auth.token.email);
+  const mine = bootstrap ? "admin" : await roleOf(request.auth.uid);
+  if (mine !== "admin" && mine !== "teacher") {
+    throw new HttpsError("permission-denied", "Only staff can create accounts.");
+  }
+  if (mine !== "admin" && (role === "admin" || role === "teacher")) {
+    throw new HttpsError("permission-denied", "Only an admin can create teacher or admin accounts.");
+  }
+
+  const issues = passwordIssues(password, email);
+  if (issues.length) {
+    throw new HttpsError("invalid-argument", "The temporary password needs " + issues.join(", ") + ".");
+  }
+
+  let user;
+  try {
+    user = await admin.auth().createUser({
+      email,
+      password,
+      displayName: name || undefined,
+    });
+  } catch (e) {
+    const code = (e && e.code) || "";
+    if (code === "auth/email-already-exists") {
+      throw new HttpsError("already-exists", "That email already has a sign-in.");
+    }
+    if (code === "auth/invalid-email") {
+      throw new HttpsError("invalid-argument", "That email address isn't valid.");
+    }
+    throw new HttpsError("internal", (e && e.message) || "Could not create the sign-in.");
+  }
+
+  const staff = role === "admin" || role === "teacher";
+  try {
+    await userDoc(user.uid).set({
+      role,
+      name,
+      email,
+      studentIds: staff ? [] : (Array.isArray(data.studentIds) ? data.studentIds : []),
+      classIds: Array.isArray(data.classIds) && data.classIds.length ? data.classIds : ["main"],
+      createdAt: Date.now(),
+      createdBy: request.auth.uid,
+    });
+  } catch (e) {
+    // Never leave a sign-in behind that no role record accounts for.
+    await admin.auth().deleteUser(user.uid).catch(() => {});
+    throw new HttpsError("internal", "Created the sign-in but could not save the account; nothing was kept.");
+  }
+
+  return { ok: true, uid: user.uid };
+});
+
+/**
  * Suspend or restore ONE account.
  *
  * Removing someone in the app suspends them rather than destroying the login:

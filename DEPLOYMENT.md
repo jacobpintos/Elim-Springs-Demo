@@ -167,14 +167,16 @@ The creator is shown a temporary password to hand off; the new user can also use
 - **Linking:** for parent/student accounts, check the students they should see.
   The staff app then publishes each student's `portals/*` read-model and
   scaffolds `responses/*` automatically.
-- **Removing:** "Remove" deletes the `users/{uid}` role record, which revokes
-  app access immediately. If the Cloud Functions are deployed (§14) the
-  **Firebase Auth sign-in is deleted too**; otherwise the app tells you to remove
-  it in **Authentication → Users** in the console. The last admin can never be
-  removed.
+- **Removing:** "Remove" **suspends** the account — the Firebase Auth sign-in is
+  disabled and the role record flagged — so app access stops immediately but the
+  removal can be undone (§14). An account left removed for 90 days is then
+  deleted automatically. **Delete forever** (admins) skips the wait and is
+  permanent. The last admin can never be removed.
 
 > Requires the **Email/Password** provider to be enabled in Firebase
-> Authentication (it already is, since sign-in uses it).
+> Authentication (it already is, since sign-in uses it). Public **sign-up** does
+> not need to be on once the Cloud Functions are deployed — see §14, *Turning
+> off public sign-up*.
 
 ---
 
@@ -220,9 +222,11 @@ browser session:
 
 ## 6. Known limitations / follow-ups
 
-- **Account deletion** removes the Auth sign-in as well once the Cloud Functions
-  are deployed (§14); without them it removes only the role record (which still
-  revokes access) and tells you which sign-in to delete in the console.
+- **Account removal** suspends the sign-in and the role record, and the account
+  is deleted for good 90 days later (§14). Without the Cloud Functions deployed
+  only the role record is flagged — which still revokes access, since the rules
+  and the app both refuse a suspended record — but the Auth sign-in stays
+  enabled until you deploy them.
 - **Per-classroom isolation** is scaffolded (see §4a) but not yet enforced; today
   all staff see all students.
 - **Slip reconciliation** into the teacher's master document happens while the
@@ -441,12 +445,13 @@ callable functions in `functions/index.js` close that gap:
 
 | Function | Used by | What it does |
 |---|---|---|
+| `createAccount` | Accounts → **Create Account** | Creates the Auth sign-in *and* the role record with the Admin SDK. An admin may create any role; a teacher only parent/student. Rolls back the sign-in if the record can't be written. |
 | `setAccountAccess` | Accounts → **Remove** / **Restore** | Disables or re-enables that user's Auth sign-in and flags the role record `suspended`. Refuses to suspend you, or the last admin. |
 | `deleteAccount` | Accounts → **Delete forever** | Deletes that user's Auth sign-in *and* their role record, permanently. Refuses to delete you, or the last admin. |
 | `purgeNonAdminAuth` | Settings → **Clear All Data** | Deletes every non-admin sign-in. Admin accounts, bootstrap admin emails, and the caller are always kept. |
 | `purgeSuspendedAccounts` | Cloud Scheduler, daily | Deletes accounts left removed for more than 90 days — sign-in and role record. Not callable from the app. |
 
-The three callables re-check server-side who the caller is — the client's claim is never
+The four callables re-check server-side who the caller is — the client's claim is never
 trusted. `deleteAccount` and `purgeNonAdminAuth` are admin-only;
 `setAccountAccess` follows the same rule as the app and the security rules: an
 admin may manage anyone, a teacher only parent/student accounts.
@@ -467,6 +472,38 @@ and is genuinely permanent — no undo, and no restore point will bring it back.
 Without the Cloud Functions deployed, removal still sets the flag on the role
 record, which blocks the app and the rules; the Auth sign-in itself just stays
 enabled until you deploy them.
+
+### Turning off public sign-up
+
+A Firebase web API key is not a secret — it identifies the project and is served
+to every visitor in `index.html`. That is fine by design, **except** while the
+project allows public sign-up: with the Email/Password provider on and account
+creation open, anyone holding that key can POST to Identity Toolkit's
+`accounts:signUp` and get a real login on the project.
+
+Such an account reaches no data — it has no `users/{uid}` record, so the app
+shows "Account not set up" and every rules path denies it. But it lets a
+stranger fill the Auth user list, and it is the mechanism by which an *unclaimed*
+bootstrap admin email (`bootstrapAdminEmails()` in the rules) could be taken and
+turned into full admin. Keep those addresses claimed, with strong passwords.
+
+Account creation used to need sign-up left on, because the app created the login
+in the browser with `createUserWithEmailAndPassword()`. `createAccount` does it
+with the Admin SDK instead, which the sign-up switch does not gate. So, **in this
+order**:
+
+1. `firebase deploy --only functions` — with `createAccount` live, verify you can
+   still create an account from the Accounts screen.
+2. Firebase console → **Authentication → Settings → User actions** → uncheck
+   **Enable create (sign-up)**.
+
+After that, `accounts:signUp` returns `ADMIN_ONLY_OPERATION` and the only way to
+get a login on this project is a teacher or admin creating one.
+
+The browser path is still in `index.html` as a fallback and runs only when the
+Cloud Functions can't be reached, so account creation keeps working on a project
+where they haven't been deployed. Once you turn sign-up off, that fallback stops
+working too — which is the intended end state, not a bug.
 
 ### Retention: removed accounts don't sit there forever
 
