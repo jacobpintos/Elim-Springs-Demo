@@ -1017,7 +1017,7 @@ const TEACHER_TOUR=[
   {tab:"reports",title:"📋 Progress Reports",body:"Reports for any date range you choose. Add more than one period to get a comparison bar chart and a trajectory line showing how grades moved."},
   {tab:"reports",title:"📋 Transcripts",body:"Official transcripts per student. Quarter columns fill in as you finalize quarters, and the final grade appears once every assigned quarter is closed."},
   {tab:"accounts",title:"👤 Accounts",body:"Everything to do with people. Add a student to the roster with or without a login, create the login later, and link parents — a parent can be linked to several children. Admins can also create other teacher and admin accounts here."},
-  {tab:"activity",title:"📜 Activity",body:"Who changed what, and when. Every edit, account change, and restore is recorded. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."},
+  {tab:"activity",title:"📜 Activity",body:"Who changed what, and when — which event was created or deleted, whose grades were touched, and which family answered a permission slip. Every edit, account change, and restore is recorded, and your own changes from this sign-in can be undone one at a time. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."},
   {tab:"settings",title:"⚙️ Settings",body:"School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar."},
   {tab:"settings",title:"💾 Restore Points & Year End",body:"A full copy is saved each time a teacher or admin signs in, and the three newest are kept — restore one to undo a bad afternoon. Promote Students, further down, closes out the year: it archives everyone to their transcript first, then moves them up a grade."},
 ];
@@ -3955,9 +3955,18 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
 
   const list=(accounts||[]).filter(u=>u.uid!==user.id);
   // Never allow the last admin to be removed — someone must retain full access.
-  const adminCount=(accounts||[]).filter(a=>a.role==="admin").length;
+  const adminCount=(accounts||[]).filter(a=>a.role==="admin"&&!a.suspended).length;
   const isLastAdmin=(u)=>u.role==="admin"&&adminCount<=1;
   const canManage=(u)=>isAdmin||!staffRole(u.role);
+  // Keep in sync with SUSPENDED_RETENTION_DAYS in functions/index.js.
+  const RETENTION_DAYS=90;
+  const suspendedNote=(u)=>{
+    if(!u.suspendedAt) return "Removed — sign-in suspended, can be restored";
+    const days=Math.floor((Date.now()-u.suspendedAt)/86400000);
+    const left=RETENTION_DAYS-days;
+    const when=days<=0?"today":days===1?"yesterday":days+" days ago";
+    return "Removed "+when+" — restorable for "+(left>1?left+" more days":"one more day")+", then deleted for good";
+  };
   const roleBadge=(r)=>({admin:"🛡️ Admin",teacher:"🎓 Teacher",parent:"👨‍👩‍👧 Parent",student:"🧒 Student"}[r]||r);
 
   // Roster students that don't have a student login yet.
@@ -4020,10 +4029,37 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
       .catch(e=>{ setBusy(false); setErr((e&&e.message)||"Could not create the account."); });
   };
   const saveLinks=(u,studentIds)=>{ window._updateAccountLinks(u.uid,studentIds).then(()=>window._logActivity&&window._logActivity("account.links","Updated linked students for "+(u.name||u.email||u.uid))).catch(e=>alert("Could not update links: "+e.message)); };
+  // Removing someone suspends their sign-in rather than destroying it, so an
+  // accidental removal can be undone — from the activity log, from here, or by
+  // restoring a snapshot — and they sign back in with the same password.
+  const who=(u)=>u.name||u.email||u.uid;
   const del=(u)=>{
     if(isLastAdmin(u)){alert("This is the last admin account. Create another admin before removing this one.");return;}
-    if(!window.confirm("Remove "+(u.name||u.email)+"'s access? Their sign-in must also be deleted in the Firebase console.")) return;
-    window._deleteAccount(u.uid).then(res=>{window._logActivity&&window._logActivity("account.remove","Removed "+u.role+" account "+(u.email||u.name||u.uid));setErr("");setOk((u.name||u.email)+" removed."+((res&&res.authDeleted)?" Their Firebase sign-in was deleted too.":" Their sign-in still exists in Firebase Authentication — remove it in the console."));}).catch(e=>alert("Could not remove account: "+((e&&e.message)||e)));
+    if(!window.confirm("Remove "+who(u)+"'s access?\n\nTheir sign-in is suspended, not deleted — they can't get in, but you can restore them from this page or undo it from the activity log, and their password still works afterwards.")) return;
+    window._suspendAccount(u.uid,true).then(res=>{
+      const label="Removed "+u.role+" account "+(u.email||u.name||u.uid)+" — sign-in suspended, can be restored";
+      const entryId=window._logActivity&&window._logActivity("account.remove",label);
+      window._registerUndo&&window._registerUndo(entryId,label,()=>{
+        window._suspendAccount(u.uid,false)
+          .then(()=>window._logActivity&&window._logActivity("undo","Undid: "+label))
+          .catch(e=>alert("Could not restore that account: "+((e&&e.message)||e)));
+      });
+      setErr("");
+      setOk(who(u)+" was removed. Their sign-in is suspended"+((res&&res.authUpdated)?"":" on this app (deploy the Cloud Functions to suspend the Firebase sign-in itself)")+" — use Restore to bring them back.");
+    }).catch(e=>alert("Could not remove account: "+((e&&e.message)||e)));
+  };
+  const restore=(u)=>{
+    window._suspendAccount(u.uid,false).then(()=>{
+      window._logActivity&&window._logActivity("account.restore","Restored "+u.role+" account "+(u.email||u.name||u.uid));
+      setErr("");setOk(who(u)+" was restored and can sign in again with their existing password.");
+    }).catch(e=>alert("Could not restore account: "+((e&&e.message)||e)));
+  };
+  const purge=(u)=>{
+    if(!window.confirm("Delete "+who(u)+"'s account for good?\n\nThis destroys the sign-in itself. It cannot be undone, and no snapshot restore will bring it back — use Remove if you might want them later.")) return;
+    window._deleteAccount(u.uid).then(res=>{
+      window._logActivity&&window._logActivity("account.remove","Deleted "+u.role+" account "+(u.email||u.name||u.uid)+" permanently");
+      setErr("");setOk(who(u)+" was deleted permanently."+((res&&res.authDeleted)?" Their Firebase sign-in was deleted too.":" Their sign-in still exists in Firebase Authentication — remove it in the console."));
+    }).catch(e=>alert("Could not delete account: "+((e&&e.message)||e)));
   };
 
   return (
@@ -4036,7 +4072,7 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
       </div>
 
       <div style={{fontSize:11,color:"var(--t3)",marginBottom:14}}>
-        {isAdmin?"As an admin you can create admins, teachers, parents, and students.":"You can create parent and student accounts. Ask an admin to add teachers."} A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication.
+        {isAdmin?"As an admin you can create admins, teachers, parents, and students.":"You can create parent and student accounts. Ask an admin to add teachers."} A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication. Removing an account suspends its sign-in — restore it here, undo it from the activity log, or roll it back with a restore point; passwords survive either way. An account left removed for 90 days is then deleted for good, automatically.
       </div>
       {ok&&<div style={{background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.3)",color:"var(--grn)",borderRadius:8,padding:"9px 12px",fontSize:12,marginBottom:12}}>{ok}</div>}
 
@@ -4155,10 +4191,13 @@ function Accounts({state,upd,accounts,user,prefillStudentId,onPrefillUsed}) {
                 <div style={{fontSize:13,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{u.name||u.email}</div>
                 <div style={{fontSize:11,color:"var(--t3)"}}>{roleBadge(u.role)} · {u.email}</div>
                 {linkedStudents.length>0&&<div style={{fontSize:10,color:"var(--acc)"}}>Linked: {linkedStudents.map(s=>s.name).join(", ")}</div>}
+                {u.suspended&&<div style={{fontSize:10,color:"var(--red)"}}>{suspendedNote(u)}</div>}
               </div>
               <div style={{display:"flex",gap:5,flexDirection:"column"}}>
-                {(u.role==="parent"||u.role==="student")&&canManage(u)&&<button className="bs a" style={{fontSize:10}} onClick={()=>setEditingUser(u)}>Edit Links</button>}
-                {canManage(u)&&!isLastAdmin(u)&&<button className="bs r" style={{fontSize:10}} onClick={()=>del(u)}>Remove</button>}
+                {(u.role==="parent"||u.role==="student")&&canManage(u)&&!u.suspended&&<button className="bs a" style={{fontSize:10}} onClick={()=>setEditingUser(u)}>Edit Links</button>}
+                {canManage(u)&&u.suspended&&<button className="bs a" style={{fontSize:10}} onClick={()=>restore(u)}>Restore</button>}
+                {canManage(u)&&!u.suspended&&!isLastAdmin(u)&&<button className="bs r" style={{fontSize:10}} onClick={()=>del(u)}>Remove</button>}
+                {canManage(u)&&u.suspended&&isAdmin&&<button className="bs r" style={{fontSize:10}} onClick={()=>purge(u)}>Delete forever</button>}
                 {isLastAdmin(u)&&<span style={{fontSize:9,color:"var(--t3)",textAlign:"right"}}>last admin</span>}
               </div>
             </div>
@@ -4175,11 +4214,20 @@ function ActivityLog({state}){
   const entries=(state.auditLog||[]).filter(e=>e&&(e.ts||0)>=cutoff).sort((a,b)=>(b.ts||0)-(a.ts||0));
   const ql=q.trim().toLowerCase();
   const filtered=ql?entries.filter(e=>(((e.actorName||"")+" "+(e.detail||"")+" "+(e.action||"")).toLowerCase().includes(ql))):entries;
-  const icon=r=>r==="admin"?"🛡️":r==="teacher"?"🎓":r==="parent"?"👨‍👩‍👧":r==="student"?"🧒":"•";
+  const icon=r=>r==="admin"?"🛡️":r==="teacher"?"🎓":r==="parent"?"👨‍👩‍👧":r==="student"?"🧒":r==="system"?"⏱️":"•";
+  // Only the newest still-undoable edit from this sign-in carries an Undo
+  // button; undoing an older one would quietly throw away everything after it.
+  // The tick just re-reads that after an undo, since the stack lives outside React.
+  const [undoTick,setUndoTick]=useState(0);
+  const undoable=useMemo(()=>{
+    if(!window._canUndo) return null;
+    const hit=entries.find(e=>window._canUndo(e.id));
+    return hit?hit.id:null;
+  },[entries,undoTick]);
   return (
     <div className="pg">
       <div className="ph"><div className="ptit">Activity Log</div></div>
-      <div style={{fontSize:11,color:"var(--t3)",marginBottom:12}}>Who changed what, and when. Entries are kept for 30 days, then removed automatically. Visible to teachers and admins only.</div>
+      <div style={{fontSize:11,color:"var(--t3)",marginBottom:12}}>Who changed what, and when. Entries are kept for 30 days, then removed automatically. Visible to teachers and admins only.<br/>Your own changes from this sign-in can be undone, newest first — the undo is recorded here too. Signing out or reloading ends that window.</div>
       <input className="inp" placeholder="Search by person or action…" value={q} onChange={e=>setQ(e.target.value)} style={{maxWidth:340,marginBottom:14}}/>
       {!filtered.length&&<p className="emp">{entries.length?"No activity matches your search.":"No activity recorded in the last 30 days."}</p>}
       <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -4190,7 +4238,13 @@ function ActivityLog({state}){
               <div style={{fontSize:12,fontWeight:600}}>{e.actorName||"Unknown"} <span style={{fontSize:10,color:"var(--t3)",fontWeight:400}}>· {e.actorRole||"—"}</span></div>
               <div style={{fontSize:12,color:"var(--t2)",wordBreak:"break-word"}}>{e.detail||e.action||"—"}</div>
             </div>
-            <div style={{fontSize:10,color:"var(--t3)",whiteSpace:"nowrap"}}>{new Date(e.ts).toLocaleString()}</div>
+            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:5}}>
+              <div style={{fontSize:10,color:"var(--t3)",whiteSpace:"nowrap"}}>{new Date(e.ts).toLocaleString()}</div>
+              {undoable===e.id&&<button className="bs" style={{fontSize:10}} onClick={()=>{
+                if(!window.confirm("Undo this change?\n\n"+(e.detail||"")+"\n\nThe data goes back to how it was just before it. Anything changed since stays as it is, and the undo is added to this log.")) return;
+                if(window._undoActivity(e.id)) setUndoTick(t=>t+1);
+              }}>Undo</button>}
+            </div>
           </div>
         ))}
       </div>
@@ -4924,7 +4978,7 @@ function Settings({state,upd}) {
               </span>
               <div style={{display:"flex",gap:5}}>
                 <button className="bs o" onClick={()=>{
-                  if(window.confirm("Roll everything back to "+fmt(snap.date)+" at "+new Date(snap.timestamp).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+"?\n\nGrades, attendance and everything else recorded since then will be replaced.\n\nKept: your restore points, the activity log, and families' permission slip answers — so no parent is asked to approve the same trip twice. An answer is only dropped if the event itself was edited since."))
+                  if(window.confirm("Roll everything back to "+fmt(snap.date)+" at "+new Date(snap.timestamp).toLocaleTimeString([],{hour:"numeric",minute:"2-digit"})+"?\n\nGrades, attendance and everything else recorded since then will be replaced.\n\nAccounts go back too: anyone removed since is restored and can sign in again with their existing password. Accounts created since are left alone.\n\nKept: your restore points, the activity log, and families' permission slip answers — so no parent is asked to approve the same trip twice. An answer is only dropped if the event itself was edited since."))
                     window._restoreSnapshot(snap.id).catch(e=>alert("Failed to restore: "+((e&&e.message)||e)));
                 }}>Restore</button>
                 <button className="bs r" onClick={()=>{ if(window.confirm("Delete this restore point? Only "+((state.saves||[]).length-1)+" will be left.")) window._deleteSnapshot(snap.id); }}>🗑</button>

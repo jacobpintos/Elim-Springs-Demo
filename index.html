@@ -456,6 +456,12 @@ window._auth.onAuthStateChanged(function(user){
       classIds: snap.exists ? (snap.data().classIds||[window._defaultClassId||"main"]) : [window._defaultClassId||"main"]
     };
     window._appUser=_appUser;
+    // A removed (suspended) account keeps its record and its login, but is let
+    // no further until someone at the school restores it.
+    if(snap.exists && snap.data().suspended && !_isAdminEmail(user.email)){
+      showNoAccess("This account has been removed by the school. If that was a mistake, ask your teacher to restore it — your password still works.");
+      return;
+    }
     // Optional: block sign-in until the email is verified (production only;
     // founding admin emails are exempt so you can't be locked out).
     if(window._requireEmailVerification && role!=="none" && !user.emailVerified && !_isAdminEmail(user.email)){
@@ -664,7 +670,7 @@ function loadTeacher(user){
     if(!_fannedOnce && _appState.students){ _fannedOnce=true; fanOutPortals(_appState); ensureResponsesDocs(_appState); }
     // Capture this sign-in's restore point once, from the data as it arrived —
     // before the teacher has had a chance to change anything.
-    if(!_snapStarted && _appState){ _snapStarted=true; captureLoginSnapshot(); }
+    maybeCaptureLoginSnapshot();
   }, function(err){
     showLoadError("We couldn\u2019t load your school data.", (err&&err.code?err.code+": ":"")+(err&&err.message||""));
   }));
@@ -677,6 +683,7 @@ function loadTeacher(user){
     window._accounts=docs;
     if(window._renderAccounts) window._renderAccounts(docs);
     if(_appState&&_appState.students){ fanOutPortals(_appState); ensureResponsesDocs(_appState); }
+    maybeCaptureLoginSnapshot();
   }, function(e){console.error("users listener:",e);}));
 
   // Reflect parent-submitted permission-slip responses back into the teacher's
@@ -727,12 +734,37 @@ window._submitSlip=function(studentId,eventId,resp){
 };
 
 // ─── Account management (staff only) ────────────────────────────────────────
-// Creating a Firebase Auth account for someone else can't disturb the signed-in
-// admin/teacher, so we do it on a SECONDARY Firebase app instance, then write
-// the user's role record with the primary (staff) session and sign the
-// secondary out. A password-reset email lets the new user set their own
-// password. Firestore rules are the real guard on who may create which role.
+// Creating an account goes through the createAccount Cloud Function, which uses
+// the Admin SDK. That matters beyond tidiness: the browser-side path below
+// needs the project's public sign-up switch left on, and with it on, anyone
+// holding the (public) web API key can register themselves a login. The Admin
+// SDK bypasses that switch, so sign-up can be turned off — see DEPLOYMENT.md
+// §14. A password-reset email still lets the new user pick their own password.
 window._createAccount=function(opts){
+  var me=_appUser||{};
+  if(!_isStaffRole(me.role)) return Promise.reject(new Error("Not authorized."));
+  if(me.role!=="admin" && _isStaffRole(opts.role)) return Promise.reject(new Error("Only an admin can create teacher or admin accounts."));
+  return window._callFn("createAccount",{
+    role:opts.role, name:opts.name||"", email:opts.email, password:opts.password,
+    studentIds:opts.studentIds||[], classIds:opts.classIds||[window._defaultClassId||"main"]
+  }).then(function(res){
+    return window._auth.sendPasswordResetEmail(opts.email).catch(function(){}).then(function(){ return res&&res.uid; });
+  }).catch(function(e){
+    var code=(e&&e.code)||"";
+    // A server-side refusal is the answer, not a reason to try the old path.
+    if(code==="functions/permission-denied"||code==="functions/unauthenticated"||
+       code==="functions/invalid-argument"||code==="functions/already-exists"||
+       code==="functions/internal") throw e;
+    // Functions not deployed yet: fall back to the browser path so account
+    // creation keeps working until they are (public sign-up must stay on).
+    return _createAccountInBrowser(opts);
+  });
+};
+// Legacy path: create the sign-in on a SECONDARY Firebase app instance so the
+// signed-in admin/teacher isn't disturbed, write the role record with the
+// primary (staff) session, then sign the secondary out. Requires public sign-up
+// to be enabled on the project; superseded by the Cloud Function above.
+function _createAccountInBrowser(opts){
   return new Promise(function(resolve,reject){
     var me=_appUser||{};
     if(!_isStaffRole(me.role)) return reject(new Error("Not authorized."));
@@ -772,7 +804,7 @@ window._createAccount=function(opts){
       reject(e);
     });
   });
-};
+}
 window._updateAccountLinks=function(uid,studentIds){
   return _school().collection("users").doc(uid).set({studentIds:studentIds},{merge:true});
 };
@@ -781,6 +813,23 @@ window._callFn=function(name,payload){
   if(!window._fns) return Promise.reject(new Error("Cloud Functions are not available."));
   return window._fns.httpsCallable(name)(payload||{}).then(function(r){return r.data;});
 };
+// Removing someone is a suspension, not a deletion: the Firebase Auth sign-in
+// is disabled and the role record flagged, so the removal can be undone (from
+// the activity log or a snapshot restore) and they sign back in with the
+// password they already had. Without the Cloud Function the sign-in itself
+// can't be disabled, but the flag alone blocks the app and the rules.
+window._suspendAccount=function(uid,suspended){
+  var flag={suspended:!!suspended,suspendedAt:suspended?Date.now():null};
+  return window._callFn("setAccountAccess",{uid:uid,suspended:!!suspended})
+    .then(function(res){ return {authUpdated:!!(res&&res.authUpdated)}; })
+    .catch(function(e){
+      var code=(e&&e.code)||"";
+      // A deliberate server-side refusal must surface, not silently fall back.
+      if(code==="functions/failed-precondition"||code==="functions/permission-denied"||code==="functions/unauthenticated") throw e;
+      return _school().collection("users").doc(uid).set(flag,{merge:true}).then(function(){ return {authUpdated:false}; });
+    });
+};
+// Permanent removal — the sign-in is destroyed and cannot be brought back.
 window._deleteAccount=function(uid){
   // Prefer the Cloud Function: it deletes the Firebase Auth sign-in as well as
   // the role record. Without it, fall back to removing the role record only —
@@ -805,8 +854,11 @@ function pruneLog(log){
   var cutoff=Date.now()-AUDIT_DAYS*24*60*60*1000;
   return (log||[]).filter(function(e){return e&&(e.ts||0)>=cutoff;}).slice(-AUDIT_MAX);
 }
-window._auditEntry=function(action,detail){
-  var u=_appUser||{};
+// `actor` overrides who the entry is credited to. Used for changes that reach
+// the teacher's copy of the data but were not made by the signed-in teacher —
+// a family answering a permission slip is the only one today.
+window._auditEntry=function(action,detail,actor){
+  var u=actor||_appUser||{};
   return {
     id:Date.now().toString(36)+Math.random().toString(36).slice(2,7),
     ts:Date.now(),
@@ -819,40 +871,185 @@ window._auditEntry=function(action,detail){
 };
 // Append a discrete audit entry (for actions that don't flow through saveState's
 // diff, e.g. account changes). Persists via the normal save path.
-window._logActivity=function(action,detail){
-  if(!_appUser||!_isStaffRole(_appUser.role)) return;
-  var log=pruneLog((((_appState||{}).auditLog)||[]).concat([window._auditEntry(action,detail)]));
-  saveState(Object.assign({},_appState,{auditLog:log}));
+window._logActivity=function(action,detail,actor){
+  if(!_appUser||!_isStaffRole(_appUser.role)) return null;
+  var entry=window._auditEntry(action,detail,actor);
+  saveState(Object.assign({},_appState,{auditLog:pruneLog((((_appState||{}).auditLog)||[]).concat([entry]))}));
+  return entry.id;   // so the caller can offer an undo for it
 };
 function _names(state,ids){
   return ids.map(function(id){var s=(state.students||[]).find(function(x){return x.id===id;});return s?s.name:id;}).join(", ");
 }
+// "Oct 4" — short, unambiguous, and safe for a date that never parsed.
+function _shortDate(iso){
+  if(!iso) return "";
+  var d=new Date(iso+"T12:00:00");
+  if(isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+}
+function _dateRange(e){
+  var a=_shortDate(e&&e.startDate), b=_shortDate(e&&e.endDate);
+  return (b&&b!==a)?(a+"\u2013"+b):a;
+}
+// An event named the way a teacher would recognise it: “Zoo Trip” (Oct 4).
+function _evLabel(e){
+  var n=((e&&e.name)||"").trim()||"Untitled event";
+  var d=_dateRange(e);
+  return "\u201C"+n+"\u201D"+(d?" ("+d+")":"");
+}
+function _byId(list){
+  var m={}; (list||[]).forEach(function(x){ if(x&&x.id) m[x.id]=x; }); return m;
+}
+function _slipStatus(r){ return (typeof r==="string"?r:(r&&r.status))||""; }
+function _slipWord(st){
+  return st==="authorized"?"approved":st==="not_authorized"?"declined":st?st:"cleared";
+}
+// Events and permission slips, described one event at a time. Two kinds of
+// change land in the same array and must not be conflated: what a teacher did
+// to the event (created it, deleted it, moved it, turned the permission-slip
+// requirement on or off) and what a family answered on the slip — the latter
+// only ever arrives from the responses/ documents, so it is credited to the
+// family rather than to whoever happened to be signed in when it merged.
+function _summarizeEvents(prev,next,out){
+  var pe=_byId(prev.events), ne=_byId(next.events);
+  Object.keys(ne).forEach(function(id){
+    if(pe[id]) return;
+    var e=ne[id], who=(e.assignedStudents||[]).length;
+    out.push({detail:"Created event "+_evLabel(e)+
+      (e.location?" at "+e.location:"")+
+      (who?" for "+who+" student"+(who===1?"":"s"):"")+
+      (e.permissionSlip?", permission slip required":"")});
+  });
+  Object.keys(pe).forEach(function(id){
+    if(!ne[id]) out.push({detail:"Deleted event "+_evLabel(pe[id])});
+  });
+  Object.keys(ne).forEach(function(id){
+    var a=pe[id], b=ne[id];
+    if(!a) return;
+    var ch=[];
+    if((a.name||"")!==(b.name||"")) ch.push("renamed from \u201C"+((a.name||"").trim()||"Untitled event")+"\u201D");
+    if((a.startDate||"")!==(b.startDate||"")||(a.endDate||"")!==(b.endDate||"")) ch.push("moved to "+(_dateRange(b)||"no date"));
+    if((a.location||"")!==(b.location||"")) ch.push(b.location?("location changed to "+b.location):"location removed");
+    if((a.description||"")!==(b.description||"")) ch.push("description edited");
+    var pa=(a.assignedStudents||[]), na=(b.assignedStudents||[]);
+    var added=na.filter(function(x){return pa.indexOf(x)<0;});
+    var gone=pa.filter(function(x){return na.indexOf(x)<0;});
+    if(added.length) ch.push("added "+_names(next,added));
+    if(gone.length) ch.push("removed "+_names(next,gone));
+    if(!a.permissionSlip&&b.permissionSlip) ch.push("permission slip now required");
+    if(a.permissionSlip&&!b.permissionSlip) ch.push("permission slip no longer required");
+    if(ch.length) out.push({detail:"Updated event "+_evLabel(b)+" \u2014 "+ch.join(", ")});
+
+    // Slip answers: a family's decision, never a staff edit.
+    var ids={};
+    Object.keys(a.responses||{}).forEach(function(k){ids[k]=1;});
+    Object.keys(b.responses||{}).forEach(function(k){ids[k]=1;});
+    Object.keys(ids).forEach(function(sid){
+      var before=_slipStatus((a.responses||{})[sid]), after=_slipStatus((b.responses||{})[sid]);
+      if(before===after) return;
+      var resp=(b.responses||{})[sid]||{};
+      var who=_names(next,[sid]);
+      var verb=after?(_slipWord(after).charAt(0).toUpperCase()+_slipWord(after).slice(1)+" the permission slip"):"Withdrew the permission slip answer";
+      out.push({
+        action:"slip",
+        detail:verb+" for "+who+" \u2014 "+_evLabel(b),
+        actor:{name:(resp.by||(who+"\u2019s family")),role:"parent",id:null}
+      });
+    });
+  });
+}
+function _summarizeSpecialDays(prev,next,out){
+  var pd=_byId(prev.specialDays), nd=_byId(next.specialDays);
+  var word=function(d){ return d.spType==="break"?"school break":d.spType==="cancel"?"cancellation":d.spType==="delay"?"delay":"special day"; };
+  Object.keys(nd).forEach(function(id){
+    if(!pd[id]) out.push({detail:"Added "+word(nd[id])+" "+_evLabel(nd[id])});
+  });
+  Object.keys(pd).forEach(function(id){
+    if(!nd[id]) out.push({detail:"Removed "+word(pd[id])+" "+_evLabel(pd[id])});
+  });
+}
 // Human summary of what changed between two states (ignores the log itself and
-// auto-snapshots). Returns [] when nothing loggable changed.
+// auto-snapshots). Returns [] when nothing loggable changed. Each item is
+// {detail, action?, actor?} — see _summarizeEvents for why an item can carry
+// an actor of its own.
 function summarizeChanges(prev,next){
   prev=prev||{}; next=next||{}; var parts=[];
+  var push=function(d){ parts.push({detail:d}); };
   var ps=(prev.students||[]).map(function(s){return s.id;});
   var ns=(next.students||[]).map(function(s){return s.id;});
-  ns.filter(function(id){return ps.indexOf(id)<0;}).forEach(function(id){parts.push("Added student "+_names(next,[id]));});
-  ps.filter(function(id){return ns.indexOf(id)<0;}).forEach(function(id){parts.push("Removed student "+_names(prev,[id]));});
+  ns.filter(function(id){return ps.indexOf(id)<0;}).forEach(function(id){push("Added student "+_names(next,[id]));});
+  ps.filter(function(id){return ns.indexOf(id)<0;}).forEach(function(id){push("Removed student "+_names(prev,[id]));});
   function perStudent(section,label){
     var keys={}; Object.keys(prev[section]||{}).forEach(function(k){keys[k]=1;}); Object.keys(next[section]||{}).forEach(function(k){keys[k]=1;});
     var ch=Object.keys(keys).filter(function(sid){return JSON.stringify((prev[section]||{})[sid])!==JSON.stringify((next[section]||{})[sid]);});
-    if(ch.length) parts.push(label+" ("+_names(next,ch)+")");
+    if(ch.length) push(label+" ("+_names(next,ch)+")");
   }
   perStudent("subjects","Updated grades");
   perStudent("attendance","Updated attendance");
   perStudent("behavior","Updated behavior");
   perStudent("sw","Updated notes");
   var pf=Object.keys(prev.finalizedQuarters||{}), nf=Object.keys(next.finalizedQuarters||{});
-  nf.filter(function(q){return pf.indexOf(q)<0;}).forEach(function(q){parts.push("Finalized "+q.toUpperCase());});
-  pf.filter(function(q){return nf.indexOf(q)<0;}).forEach(function(q){parts.push("Unlocked "+q.toUpperCase());});
-  if(JSON.stringify(prev.events||[])!==JSON.stringify(next.events||[])) parts.push("Updated events/permission slips");
-  if((prev.history||[]).length!==(next.history||[]).length) parts.push("Promoted/archived students");
-  if((prev.excuseFiles||[]).length!==(next.excuseFiles||[]).length) parts.push("Updated attendance excuses");
-  if(JSON.stringify(prev.sy||{})!==JSON.stringify(next.sy||{})) parts.push("Updated settings/school year");
+  nf.filter(function(q){return pf.indexOf(q)<0;}).forEach(function(q){push("Finalized "+q.toUpperCase());});
+  pf.filter(function(q){return nf.indexOf(q)<0;}).forEach(function(q){push("Unlocked "+q.toUpperCase());});
+  _summarizeEvents(prev,next,parts);
+  _summarizeSpecialDays(prev,next,parts);
+  if((prev.history||[]).length!==(next.history||[]).length) push("Promoted/archived students");
+  if((prev.excuseFiles||[]).length!==(next.excuseFiles||[]).length) push("Updated attendance excuses");
+  if(JSON.stringify(prev.sy||{})!==JSON.stringify(next.sy||{})) push("Updated settings/school year");
   return parts;
 }
+
+// ─── Undo (this session only) ───────────────────────────────────
+// Every logged change made in this sign-in pushes a way to reverse itself onto
+// a memory-only stack. Only the newest one can be undone: rolling back past an
+// older one would silently discard everything done since. Undoing pops the
+// stack, so the change before it becomes the next candidate. Nothing here is
+// persisted — a reload, a sign-out or a snapshot restore ends the session and
+// clears the stack.
+//
+// Two kinds of change land here. An ordinary edit keeps a copy of the data as
+// it stood just before it (never the restore points or the log itself, so an
+// undo can't erase history). An account removal keeps a function that lifts the
+// suspension instead — which is why removing someone suspends their sign-in
+// rather than destroying it. Either way the undo is recorded in the log.
+var _undoStack=[], UNDO_MAX=20, _skipDiffOnce=false;
+function _undoSnapshot(state){
+  var c=Object.assign({},state||{});
+  delete c.auditLog; delete c.saves;
+  return JSON.parse(JSON.stringify(c));
+}
+function _pushUndo(entryId,detail,run){
+  if(!entryId||typeof run!=="function") return;
+  _undoStack.push({entryId:entryId,detail:detail||"",run:run});
+  if(_undoStack.length>UNDO_MAX) _undoStack.shift();
+}
+function _clearUndo(){ _undoStack=[]; }
+// Roll the data back to `before` and say so in the log.
+function _undoStateRun(before,detail){
+  return function(){
+    var cur=_appState||{};
+    var next=Object.assign({},cur,before);
+    next.auditLog=pruneLog((cur.auditLog||[]).concat([window._auditEntry("undo","Undid: "+detail)]));
+    _skipDiffOnce=true;   // the roll-back is already described by the entry above
+    saveState(next);
+    if(window._renderApp) window._renderApp(next,_appUser);
+  };
+}
+// Offer an undo for an entry logged by the app itself (window._logActivity
+// returns the id). `run` reverses the action and logs that it did.
+window._registerUndo=function(entryId,detail,run){ _pushUndo(entryId,detail,run); };
+// True only for the newest undoable change made in this session.
+window._canUndo=function(entryId){
+  return !!(_undoStack.length&&_undoStack[_undoStack.length-1].entryId===entryId);
+};
+window._undoActivity=function(entryId){
+  if(!window._canUndo(entryId)) return false;
+  if(!_appUser||!_isStaffRole(_appUser.role)) return false;
+  var top=_undoStack.pop();
+  try{ top.run(); }
+  catch(e){ alert("Could not undo that: "+((e&&e.message)||e)); return false; }
+  return true;
+};
 
 function saveState(newState){
   // Only staff (admin/teacher) persist the master state document. For a
@@ -865,10 +1062,24 @@ function saveState(newState){
     // Coalesced audit entry: diff against the last persisted state so a burst of
     // edits becomes one entry describing what changed.
     var toWrite=newState;
-    if(_lastPersisted){
+    if(_skipDiffOnce){
+      _skipDiffOnce=false;
+    } else if(_lastPersisted){
       var changes=summarizeChanges(_lastPersisted,newState);
       if(changes.length){
-        var log=pruneLog((newState.auditLog||[]).concat([window._auditEntry("edit",changes.join("; "))]));
+        // Everything the signed-in user did coalesces into one entry; anything
+        // credited to someone else (a family's slip answer) gets its own.
+        var mine=changes.filter(function(c){return !c.actor;});
+        var theirs=changes.filter(function(c){return !!c.actor;});
+        var added=[];
+        if(mine.length){
+          var summary=mine.map(function(c){return c.detail;}).join("; ");
+          var entry=window._auditEntry("edit",summary);
+          added.push(entry);
+          _pushUndo(entry.id,summary,_undoStateRun(_undoSnapshot(_lastPersisted),summary));
+        }
+        theirs.forEach(function(c){ added.push(window._auditEntry(c.action||"edit",c.detail,c.actor)); });
+        var log=pruneLog((newState.auditLog||[]).concat(added));
         toWrite=Object.assign({},newState,{auditLog:log});
       }
     }
@@ -896,6 +1107,15 @@ function _localDate(dt){
   dt=dt||new Date();
   return dt.getFullYear()+"-"+String(dt.getMonth()+1).padStart(2,"0")+"-"+String(dt.getDate()).padStart(2,"0");
 }
+// Accounts live in users/{uid}, outside state/main, so a snapshot of the
+// gradebook alone would not bring back a login removed after it was taken.
+// Each restore point therefore carries a copy of the role records too.
+function _accountsForSnapshot(){
+  return (window._accounts||[]).map(function(u){
+    return {uid:u.uid||u.id, role:u.role||"", name:u.name||"", email:u.email||"",
+            studentIds:u.studentIds||[], classIds:u.classIds||[], suspended:!!u.suspended};
+  });
+}
 function _stateForSnapshot(state){
   var c=Object.assign({},state);
   delete c.saves;      // don't nest snapshot history inside snapshots
@@ -907,6 +1127,16 @@ function _snapHash(s){
   var h=5381;
   for(var i=0;i<s.length;i++){ h=((h*33)^s.charCodeAt(i))>>>0; }
   return s.length+"_"+h.toString(36);
+}
+// The restore point is only worth taking once both halves of the picture have
+// arrived: the gradebook (state/main) and the account records (users/). They
+// come from separate listeners in whichever order Firestore delivers them, so
+// both call this and the first one to find the other already loaded wins.
+function maybeCaptureLoginSnapshot(){
+  if(_snapStarted) return;
+  if(!_appState||!window._accounts) return;
+  _snapStarted=true;
+  captureLoginSnapshot();
 }
 function captureLoginSnapshot(){
   if(!_appUser||!_isStaffRole(_appUser.role)||!_appState) return;
@@ -921,7 +1151,7 @@ function captureLoginSnapshot(){
   var d=_localDate();
   var id="snap_"+d+"_"+Math.random().toString(36).slice(2,6);
   _school().collection("snapshots").doc(id)
-    .set({date:d,timestamp:ts,snap:body})
+    .set({date:d,timestamp:ts,snap:body,accounts:JSON.stringify(_accountsForSnapshot())})
     .then(function(){
       var meta=[{id:id,date:d,timestamp:ts,hash:hash}].concat(saves);
       // Anything past the newest three is gone for good.
@@ -970,20 +1200,61 @@ function _keepSlipAnswers(restoredEvents, liveEvents){
   });
   return {events:events, kept:kept};
 }
+/**
+ * Put the account records back the way the snapshot found them: a login removed
+ * since is un-suspended (in Firebase Auth as well as on the record), a record
+ * deleted outright is written again, and changed names/roles/links are reset —
+ * so a parent removed by mistake signs in again with their existing password.
+ *
+ * Accounts created after the snapshot are left alone: a rollback of the
+ * gradebook shouldn't quietly lock a new family out.
+ */
+function _restoreAccounts(list){
+  if(!list||!list.length) return Promise.resolve({restored:0});
+  var live={}; (window._accounts||[]).forEach(function(u){ live[u.uid||u.id]=u; });
+  var jobs=[], restored=0;
+  list.forEach(function(rec){
+    if(!rec||!rec.uid) return;
+    var cur=live[rec.uid];
+    var same=cur
+      && (cur.role||"")===(rec.role||"")
+      && (cur.name||"")===(rec.name||"")
+      && !!cur.suspended===!!rec.suspended
+      && JSON.stringify(cur.studentIds||[])===JSON.stringify(rec.studentIds||[]);
+    if(same) return;
+    restored++;
+    jobs.push(_school().collection("users").doc(rec.uid).set({
+      role:rec.role||"", name:rec.name||"", email:rec.email||"",
+      studentIds:rec.studentIds||[], classIds:rec.classIds||[],
+      suspended:!!rec.suspended, suspendedAt:rec.suspended?Date.now():null
+    },{merge:true}).catch(function(e){ console.error("Account restore error:",e); }));
+    // Re-enabling the sign-in itself needs the Cloud Function; without it the
+    // record is restored and the app lets them in again on the next deploy.
+    if(cur&&cur.suspended&&!rec.suspended){
+      jobs.push(window._callFn("setAccountAccess",{uid:rec.uid,suspended:false}).catch(function(){}));
+    }
+  });
+  return Promise.all(jobs).then(function(){ return {restored:restored}; });
+}
 // Restore a snapshot: roll the gradebook back to the stored copy while keeping
-// the current snapshot history, activity log and permission-slip answers, then
-// reload.
+// the current snapshot history, activity log and permission-slip answers, put
+// the account records back as they were, then reload.
 window._restoreSnapshot=function(id){
   return _school().collection("snapshots").doc(id).get().then(function(snap){
     if(!snap.exists) throw new Error("Snapshot data not found (it may have expired).");
     var r=JSON.parse(snap.data().snap);
+    var accts=[];
+    try{ accts=JSON.parse(snap.data().accounts||"[]"); }catch(e){ accts=[]; }
     var slips=_keepSlipAnswers(r.events,(_appState||{}).events);
-    var note="Restored snapshot from "+(snap.data().date||id)+
-      (slips.kept?" (kept "+slips.kept+" permission slip answer"+(slips.kept===1?"":"s")+")":"");
-    var log=pruneLog((((_appState||{}).auditLog)||[]).concat([window._auditEntry("data",note)]));
-    var merged=Object.assign({},r,{events:slips.events,saves:(_appState&&_appState.saves)||[],auditLog:log});
     if(window._saveTimer) clearTimeout(window._saveTimer);
-    return _school().collection("state").doc("main").set(merged).then(function(){ window.location.reload(); });
+    return _restoreAccounts(accts).then(function(acc){
+      var note="Restored snapshot from "+(snap.data().date||id)+
+        (slips.kept?" (kept "+slips.kept+" permission slip answer"+(slips.kept===1?"":"s")+")":"")+
+        (acc.restored?" (put back "+acc.restored+" account record"+(acc.restored===1?"":"s")+")":"");
+      var log=pruneLog((((_appState||{}).auditLog)||[]).concat([window._auditEntry("data",note)]));
+      var merged=Object.assign({},r,{events:slips.events,saves:(_appState&&_appState.saves)||[],auditLog:log});
+      return _school().collection("state").doc("main").set(merged);
+    }).then(function(){ window.location.reload(); });
   });
 };
 window._deleteSnapshot=function(id){
@@ -1140,7 +1411,7 @@ function _handleMfaSignIn(error){
 function doLogout(){
   _loggingIn=false;
   _clearListeners();
-  _fannedOnce=false; _snapStarted=false; _lastResponses=null;
+  _fannedOnce=false; _snapStarted=false; _lastResponses=null; _clearUndo();
   window._auth.signOut().then(function(){
     document.getElementById("login-email").value="";
     document.getElementById("login-pw").value="";
@@ -4305,7 +4576,7 @@ const TEACHER_TOUR = [{
 }, {
   tab: "activity",
   title: "📜 Activity",
-  body: "Who changed what, and when. Every edit, account change, and restore is recorded. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."
+  body: "Who changed what, and when — which event was created or deleted, whose grades were touched, and which family answered a permission slip. Every edit, account change, and restore is recorded, and your own changes from this sign-in can be undone one at a time. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."
 }, {
   tab: "settings",
   title: "⚙️ Settings",
@@ -11176,9 +11447,17 @@ function Accounts({
     studentIds: f.studentIds.includes(sid) ? f.studentIds.filter(x => x !== sid) : [...f.studentIds, sid]
   }));
   const list = (accounts || []).filter(u => u.uid !== user.id);
-  const adminCount = (accounts || []).filter(a => a.role === "admin").length;
+  const adminCount = (accounts || []).filter(a => a.role === "admin" && !a.suspended).length;
   const isLastAdmin = u => u.role === "admin" && adminCount <= 1;
   const canManage = u => isAdmin || !staffRole(u.role);
+  const RETENTION_DAYS = 90;
+  const suspendedNote = u => {
+    if (!u.suspendedAt) return "Removed — sign-in suspended, can be restored";
+    const days = Math.floor((Date.now() - u.suspendedAt) / 86400000);
+    const left = RETENTION_DAYS - days;
+    const when = days <= 0 ? "today" : days === 1 ? "yesterday" : days + " days ago";
+    return "Removed " + when + " — restorable for " + (left > 1 ? left + " more days" : "one more day") + ", then deleted for good";
+  };
   const roleBadge = r => ({
     admin: "🛡️ Admin",
     teacher: "🎓 Teacher",
@@ -11309,17 +11588,37 @@ function Accounts({
   const saveLinks = (u, studentIds) => {
     window._updateAccountLinks(u.uid, studentIds).then(() => window._logActivity && window._logActivity("account.links", "Updated linked students for " + (u.name || u.email || u.uid))).catch(e => alert("Could not update links: " + e.message));
   };
+  const who = u => u.name || u.email || u.uid;
   const del = u => {
     if (isLastAdmin(u)) {
       alert("This is the last admin account. Create another admin before removing this one.");
       return;
     }
-    if (!window.confirm("Remove " + (u.name || u.email) + "'s access? Their sign-in must also be deleted in the Firebase console.")) return;
-    window._deleteAccount(u.uid).then(res => {
-      window._logActivity && window._logActivity("account.remove", "Removed " + u.role + " account " + (u.email || u.name || u.uid));
+    if (!window.confirm("Remove " + who(u) + "'s access?\n\nTheir sign-in is suspended, not deleted — they can't get in, but you can restore them from this page or undo it from the activity log, and their password still works afterwards.")) return;
+    window._suspendAccount(u.uid, true).then(res => {
+      const label = "Removed " + u.role + " account " + (u.email || u.name || u.uid) + " — sign-in suspended, can be restored";
+      const entryId = window._logActivity && window._logActivity("account.remove", label);
+      window._registerUndo && window._registerUndo(entryId, label, () => {
+        window._suspendAccount(u.uid, false).then(() => window._logActivity && window._logActivity("undo", "Undid: " + label)).catch(e => alert("Could not restore that account: " + (e && e.message || e)));
+      });
       setErr("");
-      setOk((u.name || u.email) + " removed." + (res && res.authDeleted ? " Their Firebase sign-in was deleted too." : " Their sign-in still exists in Firebase Authentication — remove it in the console."));
+      setOk(who(u) + " was removed. Their sign-in is suspended" + (res && res.authUpdated ? "" : " on this app (deploy the Cloud Functions to suspend the Firebase sign-in itself)") + " — use Restore to bring them back.");
     }).catch(e => alert("Could not remove account: " + (e && e.message || e)));
+  };
+  const restore = u => {
+    window._suspendAccount(u.uid, false).then(() => {
+      window._logActivity && window._logActivity("account.restore", "Restored " + u.role + " account " + (u.email || u.name || u.uid));
+      setErr("");
+      setOk(who(u) + " was restored and can sign in again with their existing password.");
+    }).catch(e => alert("Could not restore account: " + (e && e.message || e)));
+  };
+  const purge = u => {
+    if (!window.confirm("Delete " + who(u) + "'s account for good?\n\nThis destroys the sign-in itself. It cannot be undone, and no snapshot restore will bring it back — use Remove if you might want them later.")) return;
+    window._deleteAccount(u.uid).then(res => {
+      window._logActivity && window._logActivity("account.remove", "Deleted " + u.role + " account " + (u.email || u.name || u.uid) + " permanently");
+      setErr("");
+      setOk(who(u) + " was deleted permanently." + (res && res.authDeleted ? " Their Firebase sign-in was deleted too." : " Their sign-in still exists in Firebase Authentication — remove it in the console."));
+    }).catch(e => alert("Could not delete account: " + (e && e.message || e)));
   };
   return React.createElement("div", {
     className: "pg"
@@ -11359,7 +11658,7 @@ function Accounts({
       color: "var(--t3)",
       marginBottom: 14
     }
-  }, isAdmin ? "As an admin you can create admins, teachers, parents, and students." : "You can create parent and student accounts. Ask an admin to add teachers.", " A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication."), ok && React.createElement("div", {
+  }, isAdmin ? "As an admin you can create admins, teachers, parents, and students." : "You can create parent and student accounts. Ask an admin to add teachers.", " A student can be added to the roster without a login, and given one later. Logins and passwords are handled by Firebase Authentication. Removing an account suspends its sign-in \u2014 restore it here, undo it from the activity log, or roll it back with a restore point; passwords survive either way. An account left removed for 90 days is then deleted for good, automatically."), ok && React.createElement("div", {
     style: {
       background: "rgba(74,222,128,0.1)",
       border: "1px solid rgba(74,222,128,0.3)",
@@ -11733,25 +12032,42 @@ function Accounts({
         fontSize: 10,
         color: "var(--acc)"
       }
-    }, "Linked: ", linkedStudents.map(s => s.name).join(", "))), React.createElement("div", {
+    }, "Linked: ", linkedStudents.map(s => s.name).join(", ")), u.suspended && React.createElement("div", {
+      style: {
+        fontSize: 10,
+        color: "var(--red)"
+      }
+    }, suspendedNote(u))), React.createElement("div", {
       style: {
         display: "flex",
         gap: 5,
         flexDirection: "column"
       }
-    }, (u.role === "parent" || u.role === "student") && canManage(u) && React.createElement("button", {
+    }, (u.role === "parent" || u.role === "student") && canManage(u) && !u.suspended && React.createElement("button", {
       className: "bs a",
       style: {
         fontSize: 10
       },
       onClick: () => setEditingUser(u)
-    }, "Edit Links"), canManage(u) && !isLastAdmin(u) && React.createElement("button", {
+    }, "Edit Links"), canManage(u) && u.suspended && React.createElement("button", {
+      className: "bs a",
+      style: {
+        fontSize: 10
+      },
+      onClick: () => restore(u)
+    }, "Restore"), canManage(u) && !u.suspended && !isLastAdmin(u) && React.createElement("button", {
       className: "bs r",
       style: {
         fontSize: 10
       },
       onClick: () => del(u)
-    }, "Remove"), isLastAdmin(u) && React.createElement("span", {
+    }, "Remove"), canManage(u) && u.suspended && isAdmin && React.createElement("button", {
+      className: "bs r",
+      style: {
+        fontSize: 10
+      },
+      onClick: () => purge(u)
+    }, "Delete forever"), isLastAdmin(u) && React.createElement("span", {
       style: {
         fontSize: 9,
         color: "var(--t3)",
@@ -11768,7 +12084,13 @@ function ActivityLog({
   const entries = (state.auditLog || []).filter(e => e && (e.ts || 0) >= cutoff).sort((a, b) => (b.ts || 0) - (a.ts || 0));
   const ql = q.trim().toLowerCase();
   const filtered = ql ? entries.filter(e => ((e.actorName || "") + " " + (e.detail || "") + " " + (e.action || "")).toLowerCase().includes(ql)) : entries;
-  const icon = r => r === "admin" ? "🛡️" : r === "teacher" ? "🎓" : r === "parent" ? "👨‍👩‍👧" : r === "student" ? "🧒" : "•";
+  const icon = r => r === "admin" ? "🛡️" : r === "teacher" ? "🎓" : r === "parent" ? "👨‍👩‍👧" : r === "student" ? "🧒" : r === "system" ? "⏱️" : "•";
+  const [undoTick, setUndoTick] = useState(0);
+  const undoable = useMemo(() => {
+    if (!window._canUndo) return null;
+    const hit = entries.find(e => window._canUndo(e.id));
+    return hit ? hit.id : null;
+  }, [entries, undoTick]);
   return React.createElement("div", {
     className: "pg"
   }, React.createElement("div", {
@@ -11781,7 +12103,7 @@ function ActivityLog({
       color: "var(--t3)",
       marginBottom: 12
     }
-  }, "Who changed what, and when. Entries are kept for 30 days, then removed automatically. Visible to teachers and admins only."), React.createElement("input", {
+  }, "Who changed what, and when. Entries are kept for 30 days, then removed automatically. Visible to teachers and admins only.", React.createElement("br", null), "Your own changes from this sign-in can be undone, newest first \u2014 the undo is recorded here too. Signing out or reloading ends that window."), React.createElement("input", {
     className: "inp",
     placeholder: "Search by person or action\u2026",
     value: q,
@@ -11836,11 +12158,27 @@ function ActivityLog({
     }
   }, e.detail || e.action || "—")), React.createElement("div", {
     style: {
+      display: "flex",
+      flexDirection: "column",
+      alignItems: "flex-end",
+      gap: 5
+    }
+  }, React.createElement("div", {
+    style: {
       fontSize: 10,
       color: "var(--t3)",
       whiteSpace: "nowrap"
     }
-  }, new Date(e.ts).toLocaleString())))));
+  }, new Date(e.ts).toLocaleString()), undoable === e.id && React.createElement("button", {
+    className: "bs",
+    style: {
+      fontSize: 10
+    },
+    onClick: () => {
+      if (!window.confirm("Undo this change?\n\n" + (e.detail || "") + "\n\nThe data goes back to how it was just before it. Anything changed since stays as it is, and the undo is added to this log.")) return;
+      if (window._undoActivity(e.id)) setUndoTick(t => t + 1);
+    }
+  }, "Undo"))))));
 }
 function PwChecklist({
   pw,
@@ -13625,7 +13963,7 @@ function Settings({
       if (window.confirm("Roll everything back to " + fmt(snap.date) + " at " + new Date(snap.timestamp).toLocaleTimeString([], {
         hour: "numeric",
         minute: "2-digit"
-      }) + "?\n\nGrades, attendance and everything else recorded since then will be replaced.\n\nKept: your restore points, the activity log, and families' permission slip answers — so no parent is asked to approve the same trip twice. An answer is only dropped if the event itself was edited since.")) window._restoreSnapshot(snap.id).catch(e => alert("Failed to restore: " + (e && e.message || e)));
+      }) + "?\n\nGrades, attendance and everything else recorded since then will be replaced.\n\nAccounts go back too: anyone removed since is restored and can sign in again with their existing password. Accounts created since are left alone.\n\nKept: your restore points, the activity log, and families' permission slip answers — so no parent is asked to approve the same trip twice. An answer is only dropped if the event itself was edited since.")) window._restoreSnapshot(snap.id).catch(e => alert("Failed to restore: " + (e && e.message || e)));
     }
   }, "Restore"), React.createElement("button", {
     className: "bs r",

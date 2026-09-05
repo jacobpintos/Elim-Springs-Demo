@@ -111,14 +111,20 @@ Data lives under `schools/elim-springs/…`:
 user record is shown "Account not set up" and given no data. (Previously an
 unknown account silently became a teacher with full access.)
 
+**Suspended accounts.** A record with `suspended: true` is treated as holding no
+role at all: `roleOf()` returns `''`, so it fails every staff check, and
+`isLinked()` refuses it as well, so a removed parent cannot read their portal or
+answer a slip. The app stops them at sign-in with an explanation. Lifting the
+suspension restores access immediately — see §14.
+
 ---
 
 ## 3. Roles
 
 | Role | Gradebook | Account management |
 |------|-----------|--------------------|
-| **admin** | full | create/edit/remove **any** account, including teachers and admins |
-| **teacher** | full | create/edit/remove **parent and student** accounts only |
+| **admin** | full | create/edit/remove/restore **any** account, including teachers and admins; delete permanently |
+| **teacher** | full | create/edit/remove/restore **parent and student** accounts only |
 | **parent** | — | portal (own children) + submit permission slips |
 | **student** | — | portal (own record) |
 
@@ -161,14 +167,16 @@ The creator is shown a temporary password to hand off; the new user can also use
 - **Linking:** for parent/student accounts, check the students they should see.
   The staff app then publishes each student's `portals/*` read-model and
   scaffolds `responses/*` automatically.
-- **Removing:** "Remove" deletes the `users/{uid}` role record, which revokes
-  app access immediately. If the Cloud Functions are deployed (§14) the
-  **Firebase Auth sign-in is deleted too**; otherwise the app tells you to remove
-  it in **Authentication → Users** in the console. The last admin can never be
-  removed.
+- **Removing:** "Remove" **suspends** the account — the Firebase Auth sign-in is
+  disabled and the role record flagged — so app access stops immediately but the
+  removal can be undone (§14). An account left removed for 90 days is then
+  deleted automatically. **Delete forever** (admins) skips the wait and is
+  permanent. The last admin can never be removed.
 
 > Requires the **Email/Password** provider to be enabled in Firebase
-> Authentication (it already is, since sign-in uses it).
+> Authentication (it already is, since sign-in uses it). Public **sign-up** does
+> not need to be on once the Cloud Functions are deployed — see §14, *Turning
+> off public sign-up*.
 
 ---
 
@@ -214,9 +222,11 @@ browser session:
 
 ## 6. Known limitations / follow-ups
 
-- **Account deletion** removes the Auth sign-in as well once the Cloud Functions
-  are deployed (§14); without them it removes only the role record (which still
-  revokes access) and tells you which sign-in to delete in the console.
+- **Account removal** suspends the sign-in and the role record, and the account
+  is deleted for good 90 days later (§14). Without the Cloud Functions deployed
+  only the role record is flagged — which still revokes access, since the rules
+  and the app both refuse a suspended record — but the Auth sign-in stays
+  enabled until you deploy them.
 - **Per-classroom isolation** is scaffolded (see §4a) but not yet enforced; today
   all staff see all students.
 - **Slip reconciliation** into the teacher's master document happens while the
@@ -253,9 +263,28 @@ copied into the parent/student portal docs.
 
 - **What's captured:** gradebook edits (grades, attendance, behavior, notes, by
   student name), roster and settings changes, quarter finalize/unlock,
-  promotion/archiving, and account create/remove/link changes — each with the
-  acting user's name and role and a timestamp. Rapid edits are coalesced into a
-  single entry per save.
+  promotion/archiving, and account create/remove/restore/link changes — each
+  with the acting user's name and role and a timestamp. Rapid edits are
+  coalesced into a single entry per save.
+- **Events and permission slips** are described one event at a time rather than
+  as a blanket "events changed": *Created event “Zoo Trip” (Oct 4) at the Zoo
+  for 12 students, permission slip required*, *Deleted event …*, or *Updated
+  event “Zoo Trip” (Oct 4) — moved to Oct 6, added Liam Torres, permission slip
+  no longer required*. School breaks, cancellations and delays are logged the
+  same way. `_summarizeEvents()` in `index.html` builds these.
+- **Slip answers are the family's, not the teacher's.** A parent's answer
+  reaches the teacher's copy of the data through `responses/{studentId}`, so it
+  used to be logged as if the signed-in teacher had made it. It now gets its own
+  entry credited to the parent who answered — *Approved the permission slip for
+  Emma Carter — “Zoo Trip” (Oct 4)* — because only a family can set that status.
+- **Undo:** every change made during the current sign-in can be reversed from
+  the log, newest first (only the newest carries an **Undo** button; undoing an
+  older one would silently discard everything done since). An ordinary edit is
+  rolled back from a memory-only copy of the data taken just before it; an
+  account removal is reversed by lifting the suspension (see §14). The undo is
+  itself recorded in the log, and the stack is memory-only — signing out or
+  reloading ends the window. Older changes are recovered with a restore
+  point (§9).
 - **Retention:** entries are kept for **30 days**. Older entries are pruned on
   every write (and capped at 2000), and the tab only ever shows the last 30
   days, so nothing older is stored or displayed during normal use. No Firestore
@@ -292,6 +321,15 @@ of the gradebook.
   preserved**, and the restore is itself recorded in the activity log (including
   how many slip answers it carried across). A restore point can also be deleted
   manually.
+- **Accounts are restored too.** Logins live in `users/{uid}`, outside
+  `state/main`, so each restore point also stores a copy of the role records
+  (`accounts` on the `snapshots/{id}` document). Restoring puts them back: an
+  account removed since is un-suspended — in Firebase Auth as well as on the
+  record — so that parent signs in again **with the password they already had**,
+  and changed names, roles and student links are reset. Accounts created since
+  the restore point are left alone, so a rollback can't lock a new family out.
+  Because it captures both, the restore point is taken once the gradebook *and*
+  the account records have loaded.
 - **Permission slips across a rollback:** a family that has already answered a
   slip is not asked again just because a teacher rolled the gradebook back.
   For each restored event, the answer currently on file wins — but only where it
@@ -407,11 +445,93 @@ callable functions in `functions/index.js` close that gap:
 
 | Function | Used by | What it does |
 |---|---|---|
-| `deleteAccount` | Accounts → **Remove** | Deletes that user's Auth sign-in *and* their role record. Refuses to delete you, or the last admin. |
+| `createAccount` | Accounts → **Create Account** | Creates the Auth sign-in *and* the role record with the Admin SDK. An admin may create any role; a teacher only parent/student. Rolls back the sign-in if the record can't be written. |
+| `setAccountAccess` | Accounts → **Remove** / **Restore** | Disables or re-enables that user's Auth sign-in and flags the role record `suspended`. Refuses to suspend you, or the last admin. |
+| `deleteAccount` | Accounts → **Delete forever** | Deletes that user's Auth sign-in *and* their role record, permanently. Refuses to delete you, or the last admin. |
 | `purgeNonAdminAuth` | Settings → **Clear All Data** | Deletes every non-admin sign-in. Admin accounts, bootstrap admin emails, and the caller are always kept. |
+| `purgeSuspendedAccounts` | Cloud Scheduler, daily | Deletes accounts left removed for more than 90 days — sign-in and role record. Not callable from the app. |
 
-Both re-check server-side that the caller is an admin (bootstrap email or a
-`role: "admin"` record) — the client's claim is never trusted.
+The four callables re-check server-side who the caller is — the client's claim is never
+trusted. `deleteAccount` and `purgeNonAdminAuth` are admin-only;
+`setAccountAccess` follows the same rule as the app and the security rules: an
+admin may manage anyone, a teacher only parent/student accounts.
+
+### Removal is a suspension, not a deletion
+
+**Remove** no longer destroys anything. It disables the Firebase Auth sign-in
+and sets `suspended: true` on `users/{uid}`; the rules treat a suspended record
+as holding no role, the app refuses the sign-in with an explanation, and the
+Accounts screen shows the account as *Removed — sign-in suspended*. That is what
+makes an accidental removal recoverable: **Restore** on the Accounts screen,
+**Undo** in the activity log, or a restore point (§9) all bring the account
+back, and because the sign-in was never deleted the password still works.
+
+**Delete forever** (admins, on an already-removed account) is the old behavior
+and is genuinely permanent — no undo, and no restore point will bring it back.
+
+Without the Cloud Functions deployed, removal still sets the flag on the role
+record, which blocks the app and the rules; the Auth sign-in itself just stays
+enabled until you deploy them.
+
+### Turning off public sign-up
+
+A Firebase web API key is not a secret — it identifies the project and is served
+to every visitor in `index.html`. That is fine by design, **except** while the
+project allows public sign-up: with the Email/Password provider on and account
+creation open, anyone holding that key can POST to Identity Toolkit's
+`accounts:signUp` and get a real login on the project.
+
+Such an account reaches no data — it has no `users/{uid}` record, so the app
+shows "Account not set up" and every rules path denies it. But it lets a
+stranger fill the Auth user list, and it is the mechanism by which an *unclaimed*
+bootstrap admin email (`bootstrapAdminEmails()` in the rules) could be taken and
+turned into full admin. Keep those addresses claimed, with strong passwords.
+
+Account creation used to need sign-up left on, because the app created the login
+in the browser with `createUserWithEmailAndPassword()`. `createAccount` does it
+with the Admin SDK instead, which the sign-up switch does not gate. So, **in this
+order**:
+
+1. `firebase deploy --only functions` — with `createAccount` live, verify you can
+   still create an account from the Accounts screen.
+2. Firebase console → **Authentication → Settings → User actions** → uncheck
+   **Enable create (sign-up)**.
+
+After that, `accounts:signUp` returns `ADMIN_ONLY_OPERATION` and the only way to
+get a login on this project is a teacher or admin creating one.
+
+The browser path is still in `index.html` as a fallback and runs only when the
+Cloud Functions can't be reached, so account creation keeps working on a project
+where they haven't been deployed. Once you turn sign-up off, that fallback stops
+working too — which is the intended end state, not a bug.
+
+### Retention: removed accounts don't sit there forever
+
+A suspension that never expires would keep a former family's name, email and
+student links in the database indefinitely — recoverable is good, permanent is
+not. `purgeSuspendedAccounts` runs daily at 03:15 America/Chicago and deletes,
+for good, every account suspended more than **`SUSPENDED_RETENTION_DAYS`** (90)
+ago: the Firebase Auth sign-in and the `users/{uid}` record both go, and the
+deletion is written to the activity log as *Retention schedule · system*, so
+staff can see it happened.
+
+- Change the window with `SUSPENDED_RETENTION_DAYS` at the top of
+  `functions/index.js`. The Accounts screen counts down to the same number —
+  `RETENTION_DAYS` in `src/app.jsx` — so change both, then `npm run build`.
+- A founding admin email is never auto-deleted.
+- A suspended record with no `suspendedAt` (suspended before this rule existed,
+  or by the offline fallback path) has its clock started on the next run rather
+  than being deleted on the strength of a missing field — so the first 90 days
+  after deploying this, nothing older is swept up by surprise.
+- If deleting the Auth sign-in fails, the role record is left in place and the
+  next run tries again — better a lingering record than a deleted record whose
+  sign-in still works.
+- The rule needs **Cloud Scheduler** enabled on the project (it comes with the
+  Blaze plan); `firebase deploy --only functions` sets up the job.
+
+Once an account is auto-deleted the removal is no longer recoverable — a restore
+point can rewrite the role record, but the sign-in itself is gone, so the family
+would need a fresh account and a new password.
 
 ### Deploy
 
