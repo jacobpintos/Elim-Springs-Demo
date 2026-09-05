@@ -4159,16 +4159,10 @@ function MultiPeriodChart({
   const COLORS = ["#4caf50", "#34d399", "#f59e0b", "#f87171", "#a78bfa", "#fb923c"];
   const BAR_H = 18;
   const GAP = 4;
-  const NAME_W = 100;
-  const chartH = allSubs.length * (periods.length * (BAR_H + GAP) + 12) + 40;
-  return React.createElement("div", {
-    style: {
-      overflowX: "auto"
-    }
-  }, React.createElement("div", {
+  return React.createElement("div", null, React.createElement("div", {
     style: {
       fontSize: 11,
-      color: "#94a3b8",
+      color: "var(--t2)",
       marginBottom: 10,
       display: "flex",
       gap: 16,
@@ -4189,12 +4183,7 @@ function MultiPeriodChart({
       background: COLORS[i % COLORS.length],
       display: "inline-block"
     }
-  }), p.label))), React.createElement("div", {
-    style: {
-      position: "relative",
-      minWidth: 340
-    }
-  }, allSubs.map((sub, si) => React.createElement("div", {
+  }), p.label))), React.createElement("div", null, allSubs.map((sub, si) => React.createElement("div", {
     key: sub.id,
     style: {
       marginBottom: 12
@@ -4202,7 +4191,8 @@ function MultiPeriodChart({
   }, React.createElement("div", {
     style: {
       fontSize: 11,
-      color: "#94a3b8",
+      fontWeight: 600,
+      color: "var(--t2)",
       marginBottom: 4,
       overflow: "hidden",
       textOverflow: "ellipsis",
@@ -4218,51 +4208,54 @@ function MultiPeriodChart({
       style: {
         display: "flex",
         alignItems: "center",
-        gap: 8,
+        gap: 7,
         marginBottom: GAP
       }
-    }, React.createElement("div", {
+    }, React.createElement("span", {
+      style: {
+        fontSize: 10,
+        color: "var(--t2)",
+        width: 58,
+        flexShrink: 0,
+        overflow: "hidden",
+        textOverflow: "ellipsis",
+        whiteSpace: "nowrap"
+      },
+      title: p.label
+    }, p.label), React.createElement("div", {
       style: {
         flex: 1,
-        background: "rgba(255,255,255,0.07)",
+        minWidth: 0,
+        background: "var(--c3)",
         borderRadius: 3,
         height: BAR_H,
-        overflow: "hidden",
-        position: "relative"
+        overflow: "hidden"
       }
     }, pct !== null && React.createElement("div", {
       style: {
-        width: pct + "%",
+        width: Math.max(0, Math.min(100, pct)) + "%",
         background: color,
         height: "100%",
         borderRadius: 3,
-        opacity: 0.85,
         transition: "width 0.3s"
       }
-    }), React.createElement("span", {
-      style: {
-        position: "absolute",
-        left: 6,
-        top: 0,
-        lineHeight: BAR_H + "px",
-        fontSize: 10,
-        color: "#fff",
-        fontWeight: 600,
-        mixBlendMode: "difference"
-      }
-    }, p.label)), React.createElement("span", {
+    })), React.createElement("span", {
       style: {
         fontSize: 12,
-        color: color,
+        color: "var(--t1)",
         fontWeight: 700,
-        width: 52,
-        textAlign: "right"
+        width: 58,
+        flexShrink: 0,
+        textAlign: "right",
+        fontFamily: "'JetBrains Mono',monospace"
       }
-    }, pct !== null ? pct + "%" : "", " ", React.createElement("span", {
+    }, pct !== null ? pct + "%" : "—", " ", React.createElement("span", {
       style: {
-        fontSize: 10
+        fontSize: 10,
+        color: "var(--t2)",
+        fontFamily: "inherit"
       }
-    }, ltr)));
+    }, pct !== null ? ltr : "")));
   })))));
 }
 const TEACHER_TOUR = [{
@@ -10353,12 +10346,13 @@ function GradeLineChart({
       endDate: p.endDate
     };
   });
+  const inPeriod = (p, d) => !p.startDate || !p.endDate ? true : d >= p.startDate && d <= p.endDate;
   const pts = allAsgns.map((a, i) => {
-    const pIdx = periods.findIndex(p => p.startDate && p.endDate && a.date >= p.startDate && a.date <= p.endDate);
+    const pIdx = periods.findIndex(p => inPeriod(p, a.date));
     const color = pIdx >= 0 ? COLORS[pIdx % COLORS.length] : "#94a3b8";
     const qPcts = [];
     periods.forEach(p => {
-      const periodAsgns = allAsgns.slice(0, i + 1).filter(x => p.startDate && p.endDate && x.date >= p.startDate && x.date <= p.endDate);
+      const periodAsgns = allAsgns.slice(0, i + 1).filter(x => inPeriod(p, x.date));
       if (!periodAsgns.length) return;
       const earned = periodAsgns.reduce((s, x) => s + (parseFloat(x.score) || 0), 0);
       const possible = periodAsgns.reduce((s, x) => s + (x.maxScore || 100), 0);

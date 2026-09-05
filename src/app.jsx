@@ -958,11 +958,9 @@ function MultiPeriodChart({periods}) {
   const COLORS=["#4caf50","#34d399","#f59e0b","#f87171","#a78bfa","#fb923c"];
   const BAR_H=18;
   const GAP=4;
-  const NAME_W=100;
-  const chartH=allSubs.length*(periods.length*(BAR_H+GAP)+12)+40;
   return(
-    <div style={{overflowX:"auto"}}>
-      <div style={{fontSize:11,color:"#94a3b8",marginBottom:10,display:"flex",gap:16,flexWrap:"wrap"}}>
+    <div>
+      <div style={{fontSize:11,color:"var(--t2)",marginBottom:10,display:"flex",gap:16,flexWrap:"wrap"}}>
         {periods.map((p,i)=>(
           <span key={p.id} style={{display:"flex",alignItems:"center",gap:5}}>
             <span style={{width:12,height:12,borderRadius:2,background:COLORS[i%COLORS.length],display:"inline-block"}}/>
@@ -970,10 +968,10 @@ function MultiPeriodChart({periods}) {
           </span>
         ))}
       </div>
-      <div style={{position:"relative",minWidth:340}}>
+      <div>
         {allSubs.map((sub,si)=>(
           <div key={sub.id} style={{marginBottom:12}}>
-            <div style={{fontSize:11,color:"#94a3b8",marginBottom:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+            <div style={{fontSize:11,fontWeight:600,color:"var(--t2)",marginBottom:4,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
               {sub.emoji} {sub.name}
             </div>
             {periods.map((p,pi)=>{
@@ -981,15 +979,20 @@ function MultiPeriodChart({periods}) {
               const pct=sd?.avg!==null&&sd?.avg!==undefined?Math.round(sd.avg):null;
               const ltr=pct!==null?getLetter(pct):"—";
               const color=COLORS[pi%COLORS.length];
+              // The period name sits beside the bar rather than inside it, and
+              // the score sits beside that. Both used to be arranged so that on
+              // a phone the score was pushed off the right-hand edge, leaving
+              // bars with no numbers at all.
               return(
-                <div key={p.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:GAP}}>
-                  <div style={{flex:1,background:"rgba(255,255,255,0.07)",borderRadius:3,height:BAR_H,overflow:"hidden",position:"relative"}}>
-                    {pct!==null&&<div style={{width:pct+"%",background:color,height:"100%",borderRadius:3,opacity:0.85,transition:"width 0.3s"}}/>}
-                    <span style={{position:"absolute",left:6,top:0,lineHeight:BAR_H+"px",fontSize:10,color:"#fff",fontWeight:600,mixBlendMode:"difference"}}>
-                      {p.label}
-                    </span>
+                <div key={p.id} style={{display:"flex",alignItems:"center",gap:7,marginBottom:GAP}}>
+                  <span style={{fontSize:10,color:"var(--t2)",width:58,flexShrink:0,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} title={p.label}>{p.label}</span>
+                  <div style={{flex:1,minWidth:0,background:"var(--c3)",borderRadius:3,height:BAR_H,overflow:"hidden"}}>
+                    {pct!==null&&<div style={{width:Math.max(0,Math.min(100,pct))+"%",background:color,height:"100%",borderRadius:3,transition:"width 0.3s"}}/>}
                   </div>
-                  <span style={{fontSize:12,color:color,fontWeight:700,width:52,textAlign:"right"}}>{pct!==null?pct+"%":""} <span style={{fontSize:10}}>{ltr}</span></span>
+                  <span style={{fontSize:12,color:"var(--t1)",fontWeight:700,width:58,flexShrink:0,textAlign:"right",fontFamily:"'JetBrains Mono',monospace"}}>
+                    {pct!==null?pct+"%":"—"} <span style={{fontSize:10,color:"var(--t2)",fontFamily:"inherit"}}>{pct!==null?ltr:""}</span>
+                  </span>
                 </div>
               );
             })}
@@ -3564,13 +3567,18 @@ function GradeLineChart({periods,subId,mdn}) {
   // Build projected final at each assignment point.
   // Each quarter with at least one grade counts equally (same as gradebook Projected Final).
   // Ungraded assignments within a quarter don't reduce its weight — they just aren't counted yet.
+  // A period with blank dates covers everything — the same rule the rest of the
+  // report filters by. Insisting on real dates here is what collapsed the whole
+  // trajectory to a flat 0% line whenever a period's dates were left empty,
+  // which is how "Period 1" starts out.
+  const inPeriod=(p,d)=>(!p.startDate||!p.endDate)?true:(d>=p.startDate&&d<=p.endDate);
   const pts=allAsgns.map((a,i)=>{
-    const pIdx=periods.findIndex(p=>p.startDate&&p.endDate&&a.date>=p.startDate&&a.date<=p.endDate);
+    const pIdx=periods.findIndex(p=>inPeriod(p,a.date));
     const color=pIdx>=0?COLORS[pIdx%COLORS.length]:"#94a3b8";
     // Quarter percentages so far (only quarters with at least one graded assignment)
     const qPcts=[];
     periods.forEach((p)=>{
-      const periodAsgns=allAsgns.slice(0,i+1).filter(x=>p.startDate&&p.endDate&&x.date>=p.startDate&&x.date<=p.endDate);
+      const periodAsgns=allAsgns.slice(0,i+1).filter(x=>inPeriod(p,x.date));
       if(!periodAsgns.length) return;
       const earned=periodAsgns.reduce((s,x)=>s+(parseFloat(x.score)||0),0);
       const possible=periodAsgns.reduce((s,x)=>s+(x.maxScore||100),0);
