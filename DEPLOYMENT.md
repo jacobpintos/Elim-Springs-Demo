@@ -348,6 +348,47 @@ of the gradebook.
 > in the Google Cloud console, which keep independent copies with their own
 > retention.
 
+## 9a. Starting mid-year: backfilling attendance
+
+**Attendance → ⏪ Backfill Past Days** fills in attendance for school days that
+have already passed, so a school adopting this partway through the year doesn't
+have to click through every day since September.
+
+Pick a date range, choose which students it applies to, choose a status
+(**Present** is the realistic bulk case), and it writes one record per student
+per school day. The dialog shows exactly what it will do before you commit —
+how many school days fall in the range, how many students, and how many records
+will be added, replaced or left alone.
+
+What counts as a school day comes from Settings, not from the calendar:
+
+- only the weekdays ticked under **School Days**,
+- only dates inside the **school year** start/end,
+- **breaks** and **cancellations** are skipped entirely,
+- a **late start** (delay) is filled in at **half** the daily hours.
+
+So set the school year dates, the school days, and any breaks or snow days
+**before** running the backfill — otherwise you will record attendance on days
+the school was shut.
+
+Two things make it safe to use more than once:
+
+- **Days that already have a record are left alone** unless you tick *Replace
+  days that already have a record*. Running it twice over the same range
+  therefore changes nothing, and the button reports "0 records".
+- The last date **cannot be in the future** — this only ever fills in days that
+  have already happened.
+
+The intended workflow is *mark everyone present for the term, then fix the
+exceptions*: run the backfill, then use the date picker at the top of the
+Attendance page to visit the days somebody was absent, tardy or excused and
+change just those students. Hours recalculate as you go, and the year totals and
+Iowa compliance projections follow automatically.
+
+Backfilled records are ordinary attendance records — they appear in the monthly
+report, the student's attendance log, the parent portal, and the hours total,
+exactly as if they had been entered on the day.
+
 ## 10. Excel export
 
 - **Gradebook → ⬇ Excel** exports the selected student's gradebook as an `.xlsx`

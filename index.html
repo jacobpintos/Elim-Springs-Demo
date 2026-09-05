@@ -1594,6 +1594,40 @@ function pctAvg(arr) {
   const possible = v.reduce((s, a) => s + (a.maxScore || 100), 0);
   return earned / possible * 100;
 }
+function attHours(status, hpd, isDelay) {
+  const full = status === "present" || status === "excused" ? hpd : status === "tardy" ? hpd * 0.75 : 0;
+  return isDelay ? full / 2 : full;
+}
+function schoolDaysInRange(sy, specialDays, from, to) {
+  const out = [];
+  if (!from || !to || from > to) return out;
+  const dm = {
+    "Mon": 1,
+    "Tue": 2,
+    "Wed": 3,
+    "Thu": 4,
+    "Fri": 5,
+    "Sat": 6,
+    "Sun": 0
+  };
+  const sched = sy && sy.scheduledDays || DAYS;
+  const start = new Date(from + "T12:00:00"),
+    end = new Date(to + "T12:00:00");
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return out;
+  for (const d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+    const ds = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    if (sy && sy.startDate && ds < sy.startDate) continue;
+    if (sy && sy.endDate && ds > sy.endDate) continue;
+    if (!sched.some(dd => dm[dd] === d.getDay())) continue;
+    const sp = (specialDays || []).find(s => s.startDate && s.endDate && ds >= s.startDate && ds <= s.endDate);
+    if (sp && sp.type !== "delay") continue;
+    out.push({
+      date: ds,
+      delay: !!sp
+    });
+  }
+  return out;
+}
 function hrsAtt(recs, sy) {
   const filtered = (recs || []).filter(r => {
     if (r.status !== "present" && r.status !== "tardy" && r.status !== "excused") return false;
@@ -4549,6 +4583,10 @@ const TEACHER_TOUR = [{
   tab: "attendance",
   title: "📅 Attendance",
   body: "Mark each day Present, Absent, Excused, or Tardy. Attach an excuse document with 📎. 📋 generates the monthly Iowa compliance report."
+}, {
+  tab: "attendance",
+  title: "⏪ Starting mid-year",
+  body: "Backfill Past Days fills in attendance for days that have already passed — set the school year, school days and any breaks in Settings first, then mark everyone present for the term and go back and fix the exceptions. It skips weekends, breaks and cancellations, and never touches a day you have already recorded."
 }, {
   tab: "behavior",
   title: "⭐ Behavior",
@@ -7590,13 +7628,17 @@ function Attendance({
     startDate: today(),
     endDate: today()
   });
+  const [showBackfill, setShowBackfill] = useState(false);
+  const [bf, setBf] = useState(null);
+  const [bfDone, setBfDone] = useState(null);
   const hpd = state.sy?.hoursPerDay || 6;
   const minHrs = state.sy?.minHrs || DEFAULT_MIN_HRS;
   const syStart = state.sy?.startDate || "";
   const syEnd = state.sy?.endDate || "";
   const outsideYear = syStart && syEnd && (date < syStart || date > syEnd);
+  const isDelayDay = d2 => (state.specialDays || []).some(x => x.type === "delay" && x.startDate && x.endDate && d2 >= x.startDate && d2 <= x.endDate);
   const setAtt = (sid, status) => {
-    const hours = status === "present" || status === "excused" ? hpd : status === "tardy" ? hpd * 0.75 : 0;
+    const hours = attHours(status, hpd, isDelayDay(date));
     upd(p => {
       const recs = p.attendance[sid] || [];
       const idx = recs.findIndex(r => r.date === date);
@@ -7613,6 +7655,98 @@ function Attendance({
           [sid]: idx >= 0 ? recs.map((r, i) => i === idx ? rec : r) : [...recs, rec]
         }
       };
+    });
+  };
+  const yesterday = (() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+  })();
+  const openBackfill = () => {
+    setBfDone(null);
+    setBf({
+      from: syStart || "",
+      to: syEnd && yesterday > syEnd ? syEnd : yesterday,
+      status: "present",
+      overwrite: false,
+      ids: state.students.map(s => s.id)
+    });
+    setShowBackfill(true);
+  };
+  const bfDays = bf ? schoolDaysInRange(state.sy, state.specialDays, bf.from, bf.to) : [];
+  const bfStudents = bf ? state.students.filter(s => bf.ids.includes(s.id)) : [];
+  const bfPlan = (() => {
+    let add = 0,
+      replace = 0,
+      keep = 0;
+    bfStudents.forEach(s => {
+      const have = new Set((state.attendance[s.id] || []).map(r => r.date));
+      bfDays.forEach(d => {
+        if (!have.has(d.date)) add++;else if (bf.overwrite) replace++;else keep++;
+      });
+    });
+    return {
+      add,
+      replace,
+      keep
+    };
+  })();
+  const bfError = (() => {
+    if (!bf) return "";
+    if (!bf.from || !bf.to) return "Choose both dates.";
+    if (bf.from > bf.to) return "The first date is after the last date.";
+    if (bf.to > today()) return "This fills in days that have already happened — the last date can't be in the future.";
+    if (!bfStudents.length) return "Choose at least one student.";
+    if (!bfDays.length) return "No school days fall in that range. Check the school year dates and any breaks in Settings.";
+    if (!bfPlan.add && !bfPlan.replace) return "Every school day in that range is already recorded.";
+    return "";
+  })();
+  const runBackfill = () => {
+    if (bfError) return;
+    const days = bfDays,
+      ids = bf.ids,
+      status = bf.status,
+      overwrite = bf.overwrite;
+    upd(p => {
+      const h = p.sy?.hoursPerDay || 6;
+      const newAtt = {
+        ...p.attendance
+      };
+      p.students.filter(s => ids.includes(s.id)).forEach(s => {
+        const recs = [...(p.attendance[s.id] || [])];
+        const idxByDate = {};
+        recs.forEach((r, i) => {
+          idxByDate[r.date] = i;
+        });
+        days.forEach(d => {
+          const rec = {
+            id: uid(),
+            date: d.date,
+            status,
+            hours: attHours(status, h, d.delay)
+          };
+          if (idxByDate[d.date] === undefined) {
+            idxByDate[d.date] = recs.length;
+            recs.push(rec);
+          } else if (overwrite) {
+            recs[idxByDate[d.date]] = rec;
+          }
+        });
+        newAtt[s.id] = recs.sort((a, b) => a.date > b.date ? 1 : -1);
+      });
+      return {
+        ...p,
+        attendance: newAtt
+      };
+    });
+    setBfDone({
+      ...bfPlan,
+      days: days.length,
+      students: bfStudents.length,
+      from: bf.from,
+      to: bf.to,
+      status,
+      delays: days.filter(d => d.delay).length
     });
   };
   const saveHours = (sid, val) => {
@@ -7732,6 +7866,10 @@ function Attendance({
     className: "bs a",
     onClick: () => setShowSp(true)
   }, "+ Break / Special Day"), React.createElement("button", {
+    className: "bs a",
+    onClick: openBackfill,
+    title: "Fill in attendance for school days that have already passed"
+  }, "\u23EA Backfill Past Days"), React.createElement("button", {
     className: "bs",
     onClick: () => setShowMonthly(true)
   }, "\uD83D\uDCCB Monthly Report"), React.createElement("button", {
@@ -7744,6 +7882,7 @@ function Attendance({
     },
     onClick: () => {
       const hpd = state.sy?.hoursPerDay || 6;
+      const hrs = attHours("present", hpd, isDelayDay(date));
       upd(p => {
         const newAtt = {
           ...p.attendance
@@ -7755,7 +7894,7 @@ function Attendance({
             id: uid(),
             date,
             status: "present",
-            hours: hpd
+            hours: hrs
           };
           newAtt[s.id] = idx >= 0 ? recs.map((r, i) => i === idx ? rec : r) : [...recs, rec];
         });
@@ -7765,7 +7904,240 @@ function Attendance({
         };
       });
     }
-  }, "\u2713 Mark All Present"))), showSp && React.createElement("div", {
+  }, "\u2713 Mark All Present"))), showBackfill && bf && React.createElement("div", {
+    className: "mo"
+  }, React.createElement("div", {
+    className: "md",
+    style: {
+      maxWidth: 520
+    }
+  }, React.createElement("div", {
+    className: "mdt"
+  }, "\u23EA Backfill Past Days"), bfDone ? React.createElement("div", null, React.createElement("div", {
+    style: {
+      background: "rgba(22,163,74,0.1)",
+      border: "1px solid rgba(22,163,74,0.35)",
+      borderRadius: 8,
+      padding: "12px 14px",
+      fontSize: 13,
+      marginBottom: 14
+    }
+  }, React.createElement("div", {
+    style: {
+      fontWeight: 700,
+      marginBottom: 5
+    }
+  }, "\u2713 Done"), "Marked ", React.createElement("strong", null, bfDone.students), " student", bfDone.students === 1 ? "" : "s", " ", React.createElement("strong", null, bfDone.status), " across ", React.createElement("strong", null, bfDone.days), " school day", bfDone.days === 1 ? "" : "s", " ", "(", fmt(bfDone.from), " \u2013 ", fmt(bfDone.to), ").", React.createElement("div", {
+    style: {
+      marginTop: 7,
+      color: "var(--t2)",
+      fontSize: 12
+    }
+  }, bfDone.add, " record", bfDone.add === 1 ? "" : "s", " added", bfDone.replace ? ", " + bfDone.replace + " replaced" : "", bfDone.keep ? ", " + bfDone.keep + " left as they were" : "", ".")), React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "var(--t2)",
+      lineHeight: 1.6
+    }
+  }, "Now correct the exceptions: pick a date at the top of this page and change anyone who was absent, tardy or excused that day. Their hours update as you go."), React.createElement("div", {
+    className: "mda"
+  }, React.createElement("button", {
+    className: "bp",
+    onClick: () => {
+      setShowBackfill(false);
+      setBf(null);
+      setBfDone(null);
+    }
+  }, "Close"))) : React.createElement("div", null, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "var(--t2)",
+      marginBottom: 14,
+      lineHeight: 1.6
+    }
+  }, "Starting mid-year? This fills in attendance for school days that have already passed. Weekends, breaks and cancellations are skipped automatically, and a late start counts as half a day. Mark everyone present first, then fix the exceptions day by day."), React.createElement("div", {
+    className: "fg"
+  }, React.createElement("label", null, "From"), React.createElement("input", {
+    className: "inp",
+    type: "date",
+    value: bf.from,
+    max: bf.to || today(),
+    onChange: e => setBf(f => ({
+      ...f,
+      from: e.target.value
+    }))
+  }), React.createElement("label", null, "To"), React.createElement("input", {
+    className: "inp",
+    type: "date",
+    value: bf.to,
+    min: bf.from || undefined,
+    max: today(),
+    onChange: e => setBf(f => ({
+      ...f,
+      to: e.target.value
+    }))
+  }), React.createElement("label", null, "Mark as"), React.createElement("select", {
+    className: "inp",
+    value: bf.status,
+    onChange: e => setBf(f => ({
+      ...f,
+      status: e.target.value
+    }))
+  }, React.createElement("option", {
+    value: "present"
+  }, "Present"), React.createElement("option", {
+    value: "absent"
+  }, "Absent"), React.createElement("option", {
+    value: "excused"
+  }, "Excused"), React.createElement("option", {
+    value: "tardy"
+  }, "Tardy"))), React.createElement("div", {
+    style: {
+      marginBottom: 12
+    }
+  }, React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 8,
+      marginBottom: 6,
+      flexWrap: "wrap"
+    }
+  }, React.createElement("span", {
+    style: {
+      fontSize: 11,
+      fontWeight: 600,
+      color: "var(--t2)"
+    }
+  }, "Students"), React.createElement("button", {
+    className: "bs",
+    style: {
+      fontSize: 10
+    },
+    onClick: () => setBf(f => ({
+      ...f,
+      ids: state.students.map(s => s.id)
+    }))
+  }, "All"), React.createElement("button", {
+    className: "bs",
+    style: {
+      fontSize: 10
+    },
+    onClick: () => setBf(f => ({
+      ...f,
+      ids: []
+    }))
+  }, "None")), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexWrap: "wrap",
+      gap: 6,
+      maxHeight: 130,
+      overflowY: "auto"
+    }
+  }, state.students.map(s => {
+    const on = bf.ids.includes(s.id);
+    return React.createElement("label", {
+      key: s.id,
+      className: "cl",
+      style: {
+        fontSize: 11,
+        padding: "5px 9px",
+        borderRadius: 20,
+        cursor: "pointer",
+        background: on ? "rgba(26,106,26,0.1)" : "var(--bg)",
+        border: "1px solid " + (on ? "rgba(26,106,26,0.35)" : "var(--br)")
+      }
+    }, React.createElement("input", {
+      type: "checkbox",
+      checked: on,
+      style: {
+        marginRight: 6
+      },
+      onChange: () => setBf(f => ({
+        ...f,
+        ids: on ? f.ids.filter(x => x !== s.id) : [...f.ids, s.id]
+      }))
+    }), s.name);
+  }))), React.createElement("label", {
+    className: "cl",
+    style: {
+      fontSize: 12,
+      marginBottom: 12,
+      display: "flex",
+      alignItems: "flex-start",
+      gap: 8
+    }
+  }, React.createElement("input", {
+    type: "checkbox",
+    checked: bf.overwrite,
+    style: {
+      marginTop: 2
+    },
+    onChange: e => setBf(f => ({
+      ...f,
+      overwrite: e.target.checked
+    }))
+  }), React.createElement("span", null, "Replace days that already have a record", React.createElement("span", {
+    style: {
+      display: "block",
+      fontSize: 10,
+      color: "var(--t2)",
+      marginTop: 2
+    }
+  }, "Off by default, so anything you have already entered is left alone and it is safe to run twice."))), bfError ? React.createElement("div", {
+    style: {
+      background: "rgba(248,113,113,0.1)",
+      border: "1px solid rgba(248,113,113,0.3)",
+      borderRadius: 7,
+      padding: "9px 11px",
+      fontSize: 12,
+      color: "var(--red)"
+    }
+  }, bfError) : React.createElement("div", {
+    style: {
+      background: "var(--bg)",
+      border: "1px solid var(--br)",
+      borderRadius: 7,
+      padding: "10px 12px",
+      fontSize: 12,
+      color: "var(--t2)",
+      lineHeight: 1.6
+    }
+  }, React.createElement("strong", {
+    style: {
+      color: "var(--t1)"
+    }
+  }, bfDays.length), " school day", bfDays.length === 1 ? "" : "s", " in range", bfDays.filter(d => d.delay).length ? " (" + bfDays.filter(d => d.delay).length + " late start" + (bfDays.filter(d => d.delay).length === 1 ? "" : "s") + " at half hours)" : "", " · ", React.createElement("strong", {
+    style: {
+      color: "var(--t1)"
+    }
+  }, bfStudents.length), " student", bfStudents.length === 1 ? "" : "s", React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, "Will add ", React.createElement("strong", {
+    style: {
+      color: "var(--acc)"
+    }
+  }, bfPlan.add), " record", bfPlan.add === 1 ? "" : "s", bfPlan.replace ? ", replace " + bfPlan.replace : "", bfPlan.keep ? ", and leave " + bfPlan.keep + " already-recorded day" + (bfPlan.keep === 1 ? "" : "s") + " alone" : "", ".")), React.createElement("div", {
+    className: "mda"
+  }, React.createElement("button", {
+    className: "bg",
+    onClick: () => {
+      setShowBackfill(false);
+      setBf(null);
+    }
+  }, "Cancel"), React.createElement("button", {
+    className: "bp",
+    disabled: !!bfError,
+    title: bfError || "",
+    style: {
+      opacity: bfError ? 0.4 : 1,
+      cursor: bfError ? "not-allowed" : "pointer"
+    },
+    onClick: runBackfill
+  }, "Fill in ", bfPlan.add + (bf.overwrite ? bfPlan.replace : 0), " record", bfPlan.add + (bf.overwrite ? bfPlan.replace : 0) === 1 ? "" : "s"))))), showSp && React.createElement("div", {
     className: "mo"
   }, React.createElement("div", {
     className: "md"
@@ -9465,8 +9837,9 @@ function AttCalModal({
   } = viewingAtt;
   const hpd = state.sy?.hoursPerDay || 6;
   const isAllStudents = !sid;
+  const isDelayDay = d2 => (state.specialDays || []).some(x => x.type === "delay" && x.startDate && x.endDate && d2 >= x.startDate && d2 <= x.endDate);
   const setAtt = (studentId, status) => {
-    const hours = status === "present" || status === "excused" ? hpd : status === "tardy" ? hpd * 0.75 : 0;
+    const hours = attHours(status, hpd, isDelayDay(date));
     upd(p => {
       const recs = p.attendance[studentId] || [];
       const idx = recs.findIndex(r => r.date === date);
@@ -9497,7 +9870,7 @@ function AttCalModal({
           id: uid(),
           date,
           status: "present",
-          hours: hpd
+          hours: attHours("present", hpd, isDelayDay(date))
         };
         newAtt[s.id] = idx >= 0 ? recs.map((r, i) => i === idx ? rec : r) : [...recs, rec];
       });

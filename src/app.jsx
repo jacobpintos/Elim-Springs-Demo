@@ -68,6 +68,33 @@ function pctAvg(arr) {
   const possible = v.reduce((s,a)=>s+(a.maxScore||100),0);
   return (earned/possible)*100;
 }
+// Hours one attendance record is worth. A "delay" day is half a school day
+// (projRemain counts it as 0.5), so a present student earns half the hours.
+function attHours(status, hpd, isDelay) {
+  const full=status==="present"||status==="excused"?hpd:status==="tardy"?hpd*0.75:0;
+  return isDelay?full/2:full;
+}
+// Every day school is actually in session between two dates, inclusive:
+// a scheduled weekday, inside the school year, not a break or cancellation.
+// Delay days are in session at half length.
+function schoolDaysInRange(sy, specialDays, from, to) {
+  const out=[];
+  if(!from||!to||from>to) return out;
+  const dm={"Mon":1,"Tue":2,"Wed":3,"Thu":4,"Fri":5,"Sat":6,"Sun":0};
+  const sched=(sy&&sy.scheduledDays)||DAYS;
+  const start=new Date(from+"T12:00:00"), end=new Date(to+"T12:00:00");
+  if(isNaN(start.getTime())||isNaN(end.getTime())) return out;
+  for(const d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
+    const ds=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    if(sy&&sy.startDate&&ds<sy.startDate) continue;
+    if(sy&&sy.endDate&&ds>sy.endDate) continue;
+    if(!sched.some(dd=>dm[dd]===d.getDay())) continue;
+    const sp=(specialDays||[]).find(s=>s.startDate&&s.endDate&&ds>=s.startDate&&ds<=s.endDate);
+    if(sp&&sp.type!=="delay") continue;      // break or cancellation — no school
+    out.push({date:ds,delay:!!sp});
+  }
+  return out;
+}
 function hrsAtt(recs, sy) {
   const filtered=(recs||[]).filter(r=>{
     if(r.status!=="present"&&r.status!=="tardy"&&r.status!=="excused") return false;
@@ -1011,6 +1038,7 @@ const TEACHER_TOUR=[
   {tab:"gradebook",title:"📊 Gradebook",body:"Pick a student, then a subject, then enter a score on each assignment. + Assignment opens a form that spells out what each field does, including which date decides the quarter. Export All to Excel gives you the whole class in one workbook."},
   {tab:"gradebook",title:"📅 Quarter View",body:"The View dropdown switches between quarters. Projected Final weights all quarters that have grades equally — the same figure that reaches the transcript once every quarter is closed."},
   {tab:"attendance",title:"📅 Attendance",body:"Mark each day Present, Absent, Excused, or Tardy. Attach an excuse document with 📎. 📋 generates the monthly Iowa compliance report."},
+  {tab:"attendance",title:"⏪ Starting mid-year",body:"Backfill Past Days fills in attendance for days that have already passed — set the school year, school days and any breaks in Settings first, then mark everyone present for the term and go back and fix the exceptions. It skips weekends, breaks and cancellations, and never touches a day you have already recorded."},
   {tab:"behavior",title:"⭐ Behavior",body:"Students on the MDN scale get a 1–5 star rating. Students on letter grades get written incident entries. Both keep a dated history."},
   {tab:"notes",title:"📝 Notes",body:"Strengths and areas to work on, per student. These carry through onto progress reports for conferences."},
   {tab:"events",title:"🗓️ Events",body:"Create events, and tick Permission Slip when you need a parent's answer. Families see pending slips beside their calendar and can change their answer later. Quarter boundaries appear on the calendar automatically."},
@@ -2194,6 +2222,10 @@ function Attendance({state,upd,isMobile}) {
   const [uploadError,setUploadError]=useState("");
   const [reportMonth,setReportMonth]=useState(new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0")); // studentId
   const [sp,setSp]=useState({type:"break",note:"",startDate:today(),endDate:today()});
+  // Backfill: the school is adopting this mid-year, so past days need filling in.
+  const [showBackfill,setShowBackfill]=useState(false);
+  const [bf,setBf]=useState(null);
+  const [bfDone,setBfDone]=useState(null);
 
   const hpd=state.sy?.hoursPerDay||6;
   const minHrs=state.sy?.minHrs||DEFAULT_MIN_HRS;
@@ -2201,14 +2233,71 @@ function Attendance({state,upd,isMobile}) {
   const syEnd=state.sy?.endDate||"";
   const outsideYear=syStart&&syEnd&&(date<syStart||date>syEnd);
 
+  // A delay day is worth half the usual hours; without this the two single-day
+  // paths would credit a full day on a two-hour late start.
+  const isDelayDay=d2=>(state.specialDays||[]).some(x=>x.type==="delay"&&x.startDate&&x.endDate&&d2>=x.startDate&&d2<=x.endDate);
   const setAtt=(sid,status)=>{
-    const hours=status==="present"||status==="excused"?hpd:status==="tardy"?hpd*0.75:0;
+    const hours=attHours(status,hpd,isDelayDay(date));
     upd(p=>{
       const recs=p.attendance[sid]||[];
       const idx=recs.findIndex(r=>r.date===date);
       const rec={id:uid(),date,status,hours};
       return {...p,attendance:{...p.attendance,[sid]:idx>=0?recs.map((r,i)=>i===idx?rec:r):[...recs,rec]}};
     });
+  };
+
+  // ── Bulk backfill of past school days ──────────────────────────────────────
+  const yesterday=(()=>{const d=new Date();d.setDate(d.getDate()-1);
+    return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");})();
+  const openBackfill=()=>{
+    setBfDone(null);
+    setBf({from:syStart||"",to:(syEnd&&yesterday>syEnd)?syEnd:yesterday,
+      status:"present",overwrite:false,ids:state.students.map(s=>s.id)});
+    setShowBackfill(true);
+  };
+  // What the range actually covers, and what filling it would change.
+  const bfDays=bf?schoolDaysInRange(state.sy,state.specialDays,bf.from,bf.to):[];
+  const bfStudents=bf?state.students.filter(s=>bf.ids.includes(s.id)):[];
+  const bfPlan=(()=>{
+    let add=0,replace=0,keep=0;
+    bfStudents.forEach(s=>{
+      const have=new Set((state.attendance[s.id]||[]).map(r=>r.date));
+      bfDays.forEach(d=>{ if(!have.has(d.date)) add++; else if(bf.overwrite) replace++; else keep++; });
+    });
+    return {add,replace,keep};
+  })();
+  const bfError=(()=>{
+    if(!bf) return "";
+    if(!bf.from||!bf.to) return "Choose both dates.";
+    if(bf.from>bf.to) return "The first date is after the last date.";
+    if(bf.to>today()) return "This fills in days that have already happened — the last date can't be in the future.";
+    if(!bfStudents.length) return "Choose at least one student.";
+    if(!bfDays.length) return "No school days fall in that range. Check the school year dates and any breaks in Settings.";
+    if(!bfPlan.add&&!bfPlan.replace) return "Every school day in that range is already recorded.";
+    return "";
+  })();
+  const runBackfill=()=>{
+    if(bfError) return;
+    const days=bfDays, ids=bf.ids, status=bf.status, overwrite=bf.overwrite;
+    upd(p=>{
+      const h=p.sy?.hoursPerDay||6;
+      const newAtt={...p.attendance};
+      p.students.filter(s=>ids.includes(s.id)).forEach(s=>{
+        const recs=[...(p.attendance[s.id]||[])];
+        const idxByDate={};
+        recs.forEach((r,i)=>{ idxByDate[r.date]=i; });
+        days.forEach(d=>{
+          const rec={id:uid(),date:d.date,status,hours:attHours(status,h,d.delay)};
+          if(idxByDate[d.date]===undefined){ idxByDate[d.date]=recs.length; recs.push(rec); }
+          else if(overwrite){ recs[idxByDate[d.date]]=rec; }
+        });
+        newAtt[s.id]=recs.sort((a,b)=>a.date>b.date?1:-1);
+      });
+      return {...p,attendance:newAtt};
+    });
+    setBfDone({...bfPlan,days:days.length,students:bfStudents.length,
+      from:bf.from,to:bf.to,status,
+      delays:days.filter(d=>d.delay).length});
   };
 
   const saveHours=(sid,val)=>{
@@ -2273,16 +2362,18 @@ function Attendance({state,upd,isMobile}) {
             min={syStart||undefined} max={syEnd||undefined}
             onChange={e=>setDate(e.target.value)}/>
           <button className="bs a" onClick={()=>setShowSp(true)}>+ Break / Special Day</button>
+          <button className="bs a" onClick={openBackfill} title="Fill in attendance for school days that have already passed">⏪ Backfill Past Days</button>
           <button className="bs" onClick={()=>setShowMonthly(true)}>📋 Monthly Report</button>
           <button className="bs a" onClick={()=>setShowUpload(true)}>📎 Upload Excuse</button>
           <button className="bp" style={{fontSize:11}} onClick={()=>{
             const hpd=state.sy?.hoursPerDay||6;
+            const hrs=attHours("present",hpd,isDelayDay(date));
             upd(p=>{
               const newAtt={...p.attendance};
               p.students.forEach(s=>{
                 const recs=p.attendance[s.id]||[];
                 const idx=recs.findIndex(r=>r.date===date);
-                const rec={id:uid(),date,status:"present",hours:hpd};
+                const rec={id:uid(),date,status:"present",hours:hrs};
                 newAtt[s.id]=idx>=0?recs.map((r,i)=>i===idx?rec:r):[...recs,rec];
               });
               return {...p,attendance:newAtt};
@@ -2290,6 +2381,98 @@ function Attendance({state,upd,isMobile}) {
           }}>✓ Mark All Present</button>
         </div>
       </div>
+
+      {showBackfill&&bf&&<div className="mo"><div className="md" style={{maxWidth:520}}>
+        <div className="mdt">⏪ Backfill Past Days</div>
+        {bfDone?(
+          <div>
+            <div style={{background:"rgba(22,163,74,0.1)",border:"1px solid rgba(22,163,74,0.35)",borderRadius:8,padding:"12px 14px",fontSize:13,marginBottom:14}}>
+              <div style={{fontWeight:700,marginBottom:5}}>✓ Done</div>
+              Marked <strong>{bfDone.students}</strong> student{bfDone.students===1?"":"s"} <strong>{bfDone.status}</strong> across <strong>{bfDone.days}</strong> school day{bfDone.days===1?"":"s"}
+              {" "}({fmt(bfDone.from)} – {fmt(bfDone.to)}).
+              <div style={{marginTop:7,color:"var(--t2)",fontSize:12}}>
+                {bfDone.add} record{bfDone.add===1?"":"s"} added
+                {bfDone.replace?", "+bfDone.replace+" replaced":""}
+                {bfDone.keep?", "+bfDone.keep+" left as they were":""}.
+              </div>
+            </div>
+            <div style={{fontSize:12,color:"var(--t2)",lineHeight:1.6}}>
+              Now correct the exceptions: pick a date at the top of this page and change
+              anyone who was absent, tardy or excused that day. Their hours update as you go.
+            </div>
+            <div className="mda"><button className="bp" onClick={()=>{setShowBackfill(false);setBf(null);setBfDone(null);}}>Close</button></div>
+          </div>
+        ):(
+          <div>
+            <div style={{fontSize:12,color:"var(--t2)",marginBottom:14,lineHeight:1.6}}>
+              Starting mid-year? This fills in attendance for school days that have already
+              passed. Weekends, breaks and cancellations are skipped automatically, and a late
+              start counts as half a day. Mark everyone present first, then fix the exceptions
+              day by day.
+            </div>
+            <div className="fg">
+              <label>From</label>
+              <input className="inp" type="date" value={bf.from} max={bf.to||today()}
+                onChange={e=>setBf(f=>({...f,from:e.target.value}))}/>
+              <label>To</label>
+              <input className="inp" type="date" value={bf.to} min={bf.from||undefined} max={today()}
+                onChange={e=>setBf(f=>({...f,to:e.target.value}))}/>
+              <label>Mark as</label>
+              <select className="inp" value={bf.status} onChange={e=>setBf(f=>({...f,status:e.target.value}))}>
+                <option value="present">Present</option>
+                <option value="absent">Absent</option>
+                <option value="excused">Excused</option>
+                <option value="tardy">Tardy</option>
+              </select>
+            </div>
+            <div style={{marginBottom:12}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,fontWeight:600,color:"var(--t2)"}}>Students</span>
+                <button className="bs" style={{fontSize:10}} onClick={()=>setBf(f=>({...f,ids:state.students.map(s=>s.id)}))}>All</button>
+                <button className="bs" style={{fontSize:10}} onClick={()=>setBf(f=>({...f,ids:[]}))}>None</button>
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:6,maxHeight:130,overflowY:"auto"}}>
+                {state.students.map(s=>{
+                  const on=bf.ids.includes(s.id);
+                  return <label key={s.id} className="cl" style={{fontSize:11,padding:"5px 9px",borderRadius:20,cursor:"pointer",
+                    background:on?"rgba(26,106,26,0.1)":"var(--bg)",border:"1px solid "+(on?"rgba(26,106,26,0.35)":"var(--br)")}}>
+                    <input type="checkbox" checked={on} style={{marginRight:6}}
+                      onChange={()=>setBf(f=>({...f,ids:on?f.ids.filter(x=>x!==s.id):[...f.ids,s.id]}))}/>
+                    {s.name}
+                  </label>;
+                })}
+              </div>
+            </div>
+            <label className="cl" style={{fontSize:12,marginBottom:12,display:"flex",alignItems:"flex-start",gap:8}}>
+              <input type="checkbox" checked={bf.overwrite} style={{marginTop:2}}
+                onChange={e=>setBf(f=>({...f,overwrite:e.target.checked}))}/>
+              <span>Replace days that already have a record
+                <span style={{display:"block",fontSize:10,color:"var(--t2)",marginTop:2}}>
+                  Off by default, so anything you have already entered is left alone and it is safe to run twice.
+                </span>
+              </span>
+            </label>
+            {bfError
+              ?<div style={{background:"rgba(248,113,113,0.1)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:7,padding:"9px 11px",fontSize:12,color:"var(--red)"}}>{bfError}</div>
+              :<div style={{background:"var(--bg)",border:"1px solid var(--br)",borderRadius:7,padding:"10px 12px",fontSize:12,color:"var(--t2)",lineHeight:1.6}}>
+                <strong style={{color:"var(--t1)"}}>{bfDays.length}</strong> school day{bfDays.length===1?"":"s"} in range
+                {bfDays.filter(d=>d.delay).length?" ("+bfDays.filter(d=>d.delay).length+" late start"+(bfDays.filter(d=>d.delay).length===1?"":"s")+" at half hours)":""}
+                {" · "}<strong style={{color:"var(--t1)"}}>{bfStudents.length}</strong> student{bfStudents.length===1?"":"s"}
+                <div style={{marginTop:4}}>
+                  Will add <strong style={{color:"var(--acc)"}}>{bfPlan.add}</strong> record{bfPlan.add===1?"":"s"}
+                  {bfPlan.replace?", replace "+bfPlan.replace:""}
+                  {bfPlan.keep?", and leave "+bfPlan.keep+" already-recorded day"+(bfPlan.keep===1?"":"s")+" alone":""}.
+                </div>
+              </div>}
+            <div className="mda">
+              <button className="bg" onClick={()=>{setShowBackfill(false);setBf(null);}}>Cancel</button>
+              <button className="bp" disabled={!!bfError} title={bfError||""}
+                style={{opacity:bfError?0.4:1,cursor:bfError?"not-allowed":"pointer"}}
+                onClick={runBackfill}>Fill in {bfPlan.add+(bf.overwrite?bfPlan.replace:0)} record{(bfPlan.add+(bf.overwrite?bfPlan.replace:0))===1?"":"s"}</button>
+            </div>
+          </div>
+        )}
+      </div></div>}
 
       {showSp&&<div className="mo"><div className="md">
         <div className="mdt">Add Break or Special Day</div>
@@ -3046,8 +3229,11 @@ function AttCalModal({state,upd,viewingAtt,onClose}) {
   const {date,sid}=viewingAtt;
   const hpd=state.sy?.hoursPerDay||6;
   const isAllStudents=!sid;
+  // A delay day is worth half the usual hours; without this the two single-day
+  // paths would credit a full day on a two-hour late start.
+  const isDelayDay=d2=>(state.specialDays||[]).some(x=>x.type==="delay"&&x.startDate&&x.endDate&&d2>=x.startDate&&d2<=x.endDate);
   const setAtt=(studentId,status)=>{
-    const hours=status==="present"||status==="excused"?hpd:status==="tardy"?hpd*0.75:0;
+    const hours=attHours(status,hpd,isDelayDay(date));
     upd(p=>{
       const recs=p.attendance[studentId]||[];
       const idx=recs.findIndex(r=>r.date===date);
@@ -3061,7 +3247,7 @@ function AttCalModal({state,upd,viewingAtt,onClose}) {
       p.students.forEach(s=>{
         const recs=p.attendance[s.id]||[];
         const idx=recs.findIndex(r=>r.date===date);
-        const rec={id:uid(),date,status:"present",hours:hpd};
+        const rec={id:uid(),date,status:"present",hours:attHours("present",hpd,isDelayDay(date))};
         newAtt[s.id]=idx>=0?recs.map((r,i)=>i===idx?rec:r):[...recs,rec];
       });
       return {...p,attendance:newAtt};
