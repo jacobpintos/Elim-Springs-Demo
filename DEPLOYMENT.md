@@ -404,11 +404,26 @@ run is collapsed to one line naming the size and range, so a backfill doesn't
 flood the log. Attendance is the kind of record a compliance question gets asked
 about later, so a correction made weeks after the fact stays findable.
 
+### The school calendar (breaks, delays, cancellations)
+
+**Settings → School Calendar** is the editable list: every break, late start
+and cancellation, with **Edit** and **Remove** on each, and an Add button.
+Attendance's **+ Break / Special Day** still adds one from where you notice it.
+
+These entries decide which days count as school days, so they drive attendance,
+the hours total and the Iowa projections — removing one turns those days back
+into ordinary school days and recalculates hours.
+
+**Families see the same list**, read-only, in their portal beside the calendar
+("No School / Late Starts"), with past entries folded away. It reaches them
+through the per-student portal document; closures are school-wide and contain no
+personal data.
+
 ### Shortened days (late starts and early outs)
 
-**+ Break / Special Day → Late start / early out** takes an **Hours held**
-figure: how much of the day actually ran. A two-hour late start on a six-hour
-day is `4`. Leave it blank and it falls back to half a day.
+A **Late start / early out** takes an **Hours held** figure: how much of the day
+actually ran. A two-hour late start on a six-hour day is `4`. Leave it blank and
+it falls back to half a day.
 
 That figure is what the day is worth everywhere — attendance hours, the
 year-to-date total, and the remaining-hours projection. Earlier versions assumed

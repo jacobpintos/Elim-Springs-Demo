@@ -1073,7 +1073,7 @@ const TEACHER_TOUR=[
   {tab:"reports",title:"📋 Transcripts",body:"Official transcripts per student. Quarter columns fill in as you finalize quarters, and the final grade appears once every assigned quarter is closed."},
   {tab:"accounts",title:"👤 Accounts",body:"Everything to do with people. Add a student to the roster with or without a login, create the login later, and link parents — a parent can be linked to several children. Admins can also create other teacher and admin accounts here."},
   {tab:"activity",title:"📜 Activity",body:"Who changed what, and when — which event was created or deleted, whose grades were touched, and which family answered a permission slip. Every edit, account change, and restore is recorded, and your own changes from this sign-in can be undone one at a time. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."},
-  {tab:"settings",title:"⚙️ Settings",body:"School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar."},
+  {tab:"settings",title:"⚙️ Settings",body:"School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar. School Calendar holds every break, late start and cancellation — families see the same list in their portal."},
   {tab:"settings",title:"💾 Restore Points & Year End",body:"A full copy is saved each time a teacher or admin signs in, and the three newest are kept — restore one to undo a bad afternoon. Promote Students, further down, closes out the year: it archives everyone to their transcript first, then moves them up a grade."},
 ];
 
@@ -1081,7 +1081,7 @@ const TEACHER_TOUR=[
 const PORTAL_SWITCH_STEP={tab:"calendar",title:"👨‍👩‍👧 Your children",body:"The buttons at the top switch between your children — everything on the page follows your choice. An amber number on a name means that child has a permission slip still waiting on you."};
 
 const PORTAL_TOUR=[
-  {tab:"calendar",title:"🗓️ Calendar",body:"Your home screen: upcoming events, assignment due dates, and quarter boundaries. Permission slips waiting on you sit to the side — you'll be asked to confirm before anything is sent, and you can change your answer afterwards."},
+  {tab:"calendar",title:"🗓️ Calendar",body:"Your home screen: upcoming events, assignment due dates, and quarter boundaries. Beside it, No School / Late Starts lists every holiday, break and closure. Permission slips waiting on you sit there too — you'll be asked to confirm before anything is sent, and you can change your answer afterwards."},
   {tab:"grades",title:"📊 Grades",body:"Current grade and average for each subject. Open a subject to see the individual assignments. The Grade Calculator (🎯) works out what score is still needed to reach a target, by quarter or for the final grade."},
   {tab:"attendance",title:"📅 Attendance",body:"The full attendance record — present, absent, excused, and tardy — with total hours attended for Iowa's requirements."},
   {tab:"notes",title:"📝 Notes",body:"Your teacher's notes on strengths and areas to work on. These are the same notes used at progress report conferences."},
@@ -4495,6 +4495,166 @@ function ActivityLog({state}){
   );
 }
 
+// Breaks, weather delays and cancellations, in one vocabulary so the staff list
+// and the family list describe the same day the same way.
+const SPECIAL_KINDS={
+  break: {label:"Holiday / Break",  icon:"🏖️", color:"var(--acc)", noSchool:true},
+  cancel:{label:"Cancelled",        icon:"❄️", color:"var(--red)", noSchool:true},
+  delay: {label:"Late start",       icon:"🕘", color:"var(--yel)", noSchool:false},
+};
+function specialKind(t){ return SPECIAL_KINDS[t]||SPECIAL_KINDS.break; }
+function specialDateLabel(sp){
+  return sp.startDate===sp.endDate?fmt(sp.startDate):fmt(sp.startDate)+" – "+fmt(sp.endDate);
+}
+function sortSpecialDays(list){
+  return (list||[]).filter(x=>x&&x.startDate&&x.endDate)
+    .slice().sort((a,b)=>a.startDate>b.startDate?1:a.startDate<b.startDate?-1:0);
+}
+/** Read-only list of school closures. Used by the family portal. */
+function ClosureList({specialDays,sy,limitPast}) {
+  const t=today();
+  const all=sortSpecialDays(specialDays)
+    .filter(sp=>!sy||!sy.startDate||!sy.endDate||(sp.endDate>=sy.startDate&&sp.startDate<=sy.endDate));
+  const upcoming=all.filter(sp=>sp.endDate>=t);
+  const past=all.filter(sp=>sp.endDate<t);
+  const shown=limitPast?upcoming:all;
+  if(!all.length) return <p className="emp" style={{fontSize:12}}>No closures or late starts on the calendar yet.</p>;
+  const row=sp=>{
+    const k=specialKind(sp.type);
+    const on=t>=sp.startDate&&t<=sp.endDate;
+    return (
+      <div key={sp.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"9px 11px",borderRadius:8,
+        background:on?"rgba(26,106,26,0.08)":"var(--bg)",border:"1px solid "+(on?"rgba(26,106,26,0.3)":"transparent")}}>
+        <span style={{fontSize:16,lineHeight:"18px"}}>{k.icon}</span>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:13,fontWeight:600}}>{sp.note||k.label}</div>
+          <div style={{fontSize:11,color:"var(--t2)",marginTop:1}}>
+            {specialDateLabel(sp)} · <span style={{color:k.color,fontWeight:600}}>{k.label}</span>
+            {sp.type==="delay"&&sp.hours!==undefined&&sp.hours!==""?" · "+sp.hours+"h held":""}
+            {on?" · today":""}
+          </div>
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+      {!shown.length&&<p className="emp" style={{fontSize:12}}>Nothing else scheduled this year.</p>}
+      {shown.map(row)}
+      {limitPast&&past.length>0&&<details style={{marginTop:2}}>
+        <summary style={{fontSize:11,color:"var(--t2)",cursor:"pointer"}}>Earlier this year ({past.length})</summary>
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:6}}>{past.map(row)}</div>
+      </details>}
+    </div>
+  );
+}
+
+/** The staff-side editable list of breaks, late starts and cancellations. */
+function SpecialDayEditor({state,upd}) {
+  const hpd=state.sy?.hoursPerDay||6;
+  const blank=()=>({type:"break",note:"",startDate:today(),endDate:today(),hours:""});
+  const [draft,setDraft]=useState(null);      // {id?,...} — id present means editing
+  const [err,setErr]=useState("");
+  const list=sortSpecialDays(state.specialDays);
+
+  const save=()=>{
+    if(!draft.startDate||!draft.endDate) return setErr("Choose both dates.");
+    if(draft.endDate<draft.startDate) return setErr("The end date is before the start date.");
+    const entry={id:draft.id||uid(),type:draft.type,note:draft.note.trim(),
+      startDate:draft.startDate,endDate:draft.endDate};
+    if(draft.type==="delay"){
+      const h=parseFloat(draft.hours);
+      entry.hours=isNaN(h)?hpd/2:Math.max(0,Math.min(hpd,h));
+    }
+    upd(p=>({...p,specialDays:draft.id
+      ?(p.specialDays||[]).map(x=>x.id===draft.id?entry:x)
+      :[...(p.specialDays||[]),entry]}));
+    setDraft(null); setErr("");
+  };
+  const remove=(sp)=>{
+    if(!window.confirm("Remove “"+(sp.note||specialKind(sp.type).label)+"” ("+specialDateLabel(sp)+")?\n\nThose days go back to being ordinary school days, and attendance hours recalculate.")) return;
+    upd(p=>({...p,specialDays:(p.specialDays||[]).filter(x=>x.id!==sp.id)}));
+    if(draft&&draft.id===sp.id) setDraft(null);
+  };
+
+  return (
+    <div>
+      {!list.length&&<p className="emp" style={{fontSize:12}}>Nothing on the calendar yet.</p>}
+      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+        {list.map(sp=>{
+          const k=specialKind(sp.type);
+          const editing=draft&&draft.id===sp.id;
+          return (
+            <div key={sp.id} style={{border:"1px solid "+(editing?"rgba(26,106,26,0.4)":"var(--br)"),borderRadius:8,padding:"9px 11px",background:editing?"rgba(26,106,26,0.05)":"var(--bg)"}}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:10,flexWrap:"wrap"}}>
+                <span style={{fontSize:16,lineHeight:"18px"}}>{k.icon}</span>
+                <div style={{minWidth:0,flex:1}}>
+                  <div style={{fontSize:12,fontWeight:600}}>{sp.note||k.label}</div>
+                  <div style={{fontSize:11,color:"var(--t2)",marginTop:1}}>
+                    {specialDateLabel(sp)} · <span style={{color:k.color,fontWeight:600}}>{k.label}</span>
+                    {sp.type==="delay"?" · "+(sp.hours!==undefined&&sp.hours!==""?sp.hours:hpd/2)+"h of "+hpd+"h held":""}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:5}}>
+                  <button className="bs" style={{fontSize:10}} onClick={()=>{setErr("");
+                    setDraft(editing?null:{id:sp.id,type:sp.type,note:sp.note||"",startDate:sp.startDate,endDate:sp.endDate,hours:sp.hours===undefined?"":String(sp.hours)});}}>
+                    {editing?"Close":"Edit"}
+                  </button>
+                  <button className="bs r" style={{fontSize:10}} onClick={()=>remove(sp)}>Remove</button>
+                </div>
+              </div>
+              {editing&&<SpecialDayFields draft={draft} setDraft={setDraft} hpd={hpd} err={err} onSave={save} onCancel={()=>{setDraft(null);setErr("");}}/>}
+            </div>
+          );
+        })}
+      </div>
+      {draft&&!draft.id
+        ?<div style={{border:"1px solid rgba(26,106,26,0.4)",borderRadius:8,padding:"9px 11px",background:"rgba(26,106,26,0.05)"}}>
+           <div style={{fontSize:12,fontWeight:600,marginBottom:2}}>New calendar entry</div>
+           <SpecialDayFields draft={draft} setDraft={setDraft} hpd={hpd} err={err} onSave={save} onCancel={()=>{setDraft(null);setErr("");}}/>
+         </div>
+        :<button className="bs a" onClick={()=>{setErr("");setDraft(blank());}}>+ Add break, late start or cancellation</button>}
+    </div>
+  );
+}
+function SpecialDayFields({draft,setDraft,hpd,err,onSave,onCancel}) {
+  const set=(k,v)=>setDraft(d=>({...d,[k]:v}));
+  return (
+    <div style={{marginTop:9}}>
+      <div className="fg" style={{marginBottom:8}}>
+        <label>Type</label>
+        <select className="inp" value={draft.type} onChange={e=>set("type",e.target.value)}>
+          <option value="break">Holiday / Break — no school</option>
+          <option value="cancel">Cancelled — no school (snow day, closure)</option>
+          <option value="delay">Late start / early out — shortened day</option>
+        </select>
+        <label>Name</label>
+        <input className="inp" value={draft.note} onChange={e=>set("note",e.target.value)}
+          placeholder={draft.type==="cancel"?"e.g. Snow day":draft.type==="delay"?"e.g. Two-hour delay":"e.g. Thanksgiving Break"}/>
+        <label>From</label>
+        <input className="inp" type="date" value={draft.startDate} onChange={e=>set("startDate",e.target.value)}/>
+        <label>To</label>
+        <input className="inp" type="date" value={draft.endDate} min={draft.startDate||undefined} onChange={e=>set("endDate",e.target.value)}/>
+        {draft.type==="delay"&&<>
+          <label>Hours held</label>
+          <div>
+            <input className="inp" type="number" min="0" max={hpd} step="0.25" style={{maxWidth:120}}
+              value={draft.hours} placeholder={String(hpd/2)} onChange={e=>set("hours",e.target.value)}/>
+            <div style={{fontSize:10,color:"var(--t2)",marginTop:4,lineHeight:1.45}}>
+              How much of the {hpd}-hour day ran. A two-hour late start is {Math.max(0,hpd-2)}. Blank = half a day ({hpd/2}).
+            </div>
+          </div>
+        </>}
+      </div>
+      {err&&<div style={{fontSize:11,color:"var(--red)",marginBottom:8}}>⚠️ {err}</div>}
+      <div style={{display:"flex",gap:6}}>
+        <button className="bp" style={{fontSize:11}} onClick={onSave}>{draft.id?"Save changes":"Add to calendar"}</button>
+        <button className="bg" style={{fontSize:11}} onClick={onCancel}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
 // ─── SETTINGS ────────────────────────────────────────────────────────────────
 function PwChecklist({pw,email}){
   if(!pw) return null;
@@ -5027,6 +5187,15 @@ function Settings({state,upd}) {
           <div className="cg">{DAYS.map(d=><label key={d} className="cl"><input type="checkbox" checked={(sy.scheduledDays||DAYS).includes(d)} onChange={e=>setSy(s=>({...s,scheduledDays:e.target.checked?[...(s.scheduledDays||[]),d]:(s.scheduledDays||[]).filter(x=>x!==d)}))}/>{d}</label>)}</div>
         </div>
         <button className="bp" onClick={()=>{_yearDatesReminded=false;upd(p=>({...p,sy:{...sy,needsYearDates:false}}));}}>Save School Year</button>
+      </div>
+      <div className="card" style={{marginBottom:16}}>
+        <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>📅 School Calendar — Breaks, Delays &amp; Cancellations</div>
+        <div style={{fontSize:11,color:"var(--t2)",marginBottom:12,lineHeight:1.6}}>
+          These decide which days count as school days, so they drive attendance, the hours total and
+          the Iowa projections. Families see the same list in their portal. A late start still counts
+          as a school day, at the hours you record for it.
+        </div>
+        <SpecialDayEditor state={state} upd={upd}/>
       </div>
       <div className="card" style={{marginBottom:16}}>
         <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>📱 Mobile Bottom Nav — Pinned Pages</div>
@@ -5697,6 +5866,10 @@ function PortalEventsTab({stu,state,upd,user,isMobile}) {
         </div>
 
         <div>
+          <div className="card" style={{marginBottom:18}}>
+            <div className="stit">🏫 No School / Late Starts</div>
+            <ClosureList specialDays={state.specialDays} sy={state.sy} limitPast={true}/>
+          </div>
           <div className="card" style={{marginBottom:18}}>
             <div className="stit">📋 Permission Slips</div>
             {!slipPending.length&&!slipAnswered.length&&<p className="emp" style={{fontSize:12}}>Nothing needs a response.</p>}

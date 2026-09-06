@@ -97,14 +97,15 @@ body{background:var(--bg);color:var(--t1);min-height:100vh;}
 .ib.d:hover{background:rgba(248,113,113,.15);}
 
 /* INPUTS */
-.inp{background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:8px;padding:8px 12px;color:var(--t1);font-size:12px;font-family:inherit;width:100%;transition:border-color .15s;}
+.inp{background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:8px;padding:8px 12px;color:var(--t1);font-size:12px;font-family:inherit;width:100%;max-width:100%;box-sizing:border-box;transition:border-color .15s;}
 .inp:focus{outline:none;border-color:var(--acc);box-shadow:0 0 0 3px rgba(26,106,26,0.1);}
 .ins{background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:6px;padding:4px 8px;color:var(--t1);font-size:11px;font-family:inherit;}
 .ins:focus{outline:none;border-color:var(--acc);}
 .inx{background:#fff;border:1px solid rgba(0,0,0,0.12);border-radius:5px;padding:3px 5px;color:var(--t1);font-size:11px;font-family:inherit;width:100%;}
 
 /* FORM */
-.fg{display:grid;grid-template-columns:100px 1fr;gap:9px 10px;align-items:center;margin-bottom:14px;}
+.fg{display:grid;grid-template-columns:100px minmax(0,1fr);gap:9px 10px;align-items:center;margin-bottom:14px;}
+.fg>*{min-width:0;}
 .fg label{font-size:11px;color:var(--t2);font-weight:500;}
 .cg{display:flex;flex-wrap:wrap;gap:7px;}
 .cl{display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer;}
@@ -246,7 +247,7 @@ body{background:var(--bg);color:var(--t1);min-height:100vh;}
   .ptit{font-size:17px;}
   .card{padding:12px;}
   .modal .md{padding:18px;margin:8px;}
-  .fg{grid-template-columns:90px 1fr;gap:8px;}
+  .fg{grid-template-columns:90px minmax(0,1fr);gap:8px;}
   .dgrid{grid-template-columns:1fr 1fr;}
   .gbl{grid-template-columns:1fr;}
   .smgr{grid-template-columns:1fr;}
@@ -557,11 +558,12 @@ function derivePortalDoc(state, studentId, allowedUids){
   return {
     student:student, sy:state.sy||{}, subjects:subjects, attendance:attendance,
     sw:sw, events:events, finalizedQuarters:state.finalizedQuarters||{},
+    specialDays:state.specialDays||[],
     history:history, allowedUids:allowedUids||[], updatedAt:Date.now()
   };
 }
 function assemblePortalState(portalDocs, responsesByStudent){
-  var students=[], subjects={}, attendance={}, sw={}, history=[], eventsById={}, sy={}, fq={};
+  var students=[], subjects={}, attendance={}, sw={}, history=[], eventsById={}, sy={}, fq={}, specialById={};
   (portalDocs||[]).forEach(function(pd){
     var sid=pd.studentId, d=pd.data||{};
     if(d.student) students.push(d.student);
@@ -571,6 +573,8 @@ function assemblePortalState(portalDocs, responsesByStudent){
     (d.history||[]).forEach(function(h){history.push(h);});
     if(d.sy&&Object.keys(d.sy).length) sy=d.sy;
     if(d.finalizedQuarters) fq=d.finalizedQuarters;
+    // School-wide, so identical in every child's doc — de-duplicate by id.
+    (d.specialDays||[]).forEach(function(x){ if(x&&x.id) specialById[x.id]=x; });
     (d.events||[]).forEach(function(e){ if(!eventsById[e.id]) eventsById[e.id]=Object.assign({},e,{responses:{}}); });
   });
   Object.keys(responsesByStudent||{}).forEach(function(sid){
@@ -578,7 +582,8 @@ function assemblePortalState(portalDocs, responsesByStudent){
     Object.keys(slips).forEach(function(eid){ if(eventsById[eid]) eventsById[eid].responses[sid]=slips[eid]; });
   });
   return {
-    students:students, subjects:subjects, attendance:attendance, sw:sw, behavior:{}, specialDays:[],
+    students:students, subjects:subjects, attendance:attendance, sw:sw, behavior:{},
+    specialDays:Object.keys(specialById).map(function(k){return specialById[k];}),
     events:Object.keys(eventsById).map(function(k){return eventsById[k];}),
     sy:sy, finalizedQuarters:fq, history:history, users:[], saves:[], excuseFiles:[]
   };
@@ -4675,7 +4680,7 @@ const TEACHER_TOUR = [{
 }, {
   tab: "settings",
   title: "⚙️ Settings",
-  body: "School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar."
+  body: "School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar. School Calendar holds every break, late start and cancellation — families see the same list in their portal."
 }, {
   tab: "settings",
   title: "💾 Restore Points & Year End",
@@ -4689,7 +4694,7 @@ const PORTAL_SWITCH_STEP = {
 const PORTAL_TOUR = [{
   tab: "calendar",
   title: "🗓️ Calendar",
-  body: "Your home screen: upcoming events, assignment due dates, and quarter boundaries. Permission slips waiting on you sit to the side — you'll be asked to confirm before anything is sent, and you can change your answer afterwards."
+  body: "Your home screen: upcoming events, assignment due dates, and quarter boundaries. Beside it, No School / Late Starts lists every holiday, break and closure. Permission slips waiting on you sit there too — you'll be asked to confirm before anything is sent, and you can change your answer afterwards."
 }, {
   tab: "grades",
   title: "📊 Grades",
@@ -12681,6 +12686,383 @@ function ActivityLog({
     }
   }, "Undo"))))));
 }
+const SPECIAL_KINDS = {
+  break: {
+    label: "Holiday / Break",
+    icon: "🏖️",
+    color: "var(--acc)",
+    noSchool: true
+  },
+  cancel: {
+    label: "Cancelled",
+    icon: "❄️",
+    color: "var(--red)",
+    noSchool: true
+  },
+  delay: {
+    label: "Late start",
+    icon: "🕘",
+    color: "var(--yel)",
+    noSchool: false
+  }
+};
+function specialKind(t) {
+  return SPECIAL_KINDS[t] || SPECIAL_KINDS.break;
+}
+function specialDateLabel(sp) {
+  return sp.startDate === sp.endDate ? fmt(sp.startDate) : fmt(sp.startDate) + " – " + fmt(sp.endDate);
+}
+function sortSpecialDays(list) {
+  return (list || []).filter(x => x && x.startDate && x.endDate).slice().sort((a, b) => a.startDate > b.startDate ? 1 : a.startDate < b.startDate ? -1 : 0);
+}
+function ClosureList({
+  specialDays,
+  sy,
+  limitPast
+}) {
+  const t = today();
+  const all = sortSpecialDays(specialDays).filter(sp => !sy || !sy.startDate || !sy.endDate || sp.endDate >= sy.startDate && sp.startDate <= sy.endDate);
+  const upcoming = all.filter(sp => sp.endDate >= t);
+  const past = all.filter(sp => sp.endDate < t);
+  const shown = limitPast ? upcoming : all;
+  if (!all.length) return React.createElement("p", {
+    className: "emp",
+    style: {
+      fontSize: 12
+    }
+  }, "No closures or late starts on the calendar yet.");
+  const row = sp => {
+    const k = specialKind(sp.type);
+    const on = t >= sp.startDate && t <= sp.endDate;
+    return React.createElement("div", {
+      key: sp.id,
+      style: {
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        padding: "9px 11px",
+        borderRadius: 8,
+        background: on ? "rgba(26,106,26,0.08)" : "var(--bg)",
+        border: "1px solid " + (on ? "rgba(26,106,26,0.3)" : "transparent")
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 16,
+        lineHeight: "18px"
+      }
+    }, k.icon), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 13,
+        fontWeight: 600
+      }
+    }, sp.note || k.label), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--t2)",
+        marginTop: 1
+      }
+    }, specialDateLabel(sp), " \xB7 ", React.createElement("span", {
+      style: {
+        color: k.color,
+        fontWeight: 600
+      }
+    }, k.label), sp.type === "delay" && sp.hours !== undefined && sp.hours !== "" ? " · " + sp.hours + "h held" : "", on ? " · today" : "")));
+  };
+  return React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6
+    }
+  }, !shown.length && React.createElement("p", {
+    className: "emp",
+    style: {
+      fontSize: 12
+    }
+  }, "Nothing else scheduled this year."), shown.map(row), limitPast && past.length > 0 && React.createElement("details", {
+    style: {
+      marginTop: 2
+    }
+  }, React.createElement("summary", {
+    style: {
+      fontSize: 11,
+      color: "var(--t2)",
+      cursor: "pointer"
+    }
+  }, "Earlier this year (", past.length, ")"), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      marginTop: 6
+    }
+  }, past.map(row))));
+}
+function SpecialDayEditor({
+  state,
+  upd
+}) {
+  const hpd = state.sy?.hoursPerDay || 6;
+  const blank = () => ({
+    type: "break",
+    note: "",
+    startDate: today(),
+    endDate: today(),
+    hours: ""
+  });
+  const [draft, setDraft] = useState(null);
+  const [err, setErr] = useState("");
+  const list = sortSpecialDays(state.specialDays);
+  const save = () => {
+    if (!draft.startDate || !draft.endDate) return setErr("Choose both dates.");
+    if (draft.endDate < draft.startDate) return setErr("The end date is before the start date.");
+    const entry = {
+      id: draft.id || uid(),
+      type: draft.type,
+      note: draft.note.trim(),
+      startDate: draft.startDate,
+      endDate: draft.endDate
+    };
+    if (draft.type === "delay") {
+      const h = parseFloat(draft.hours);
+      entry.hours = isNaN(h) ? hpd / 2 : Math.max(0, Math.min(hpd, h));
+    }
+    upd(p => ({
+      ...p,
+      specialDays: draft.id ? (p.specialDays || []).map(x => x.id === draft.id ? entry : x) : [...(p.specialDays || []), entry]
+    }));
+    setDraft(null);
+    setErr("");
+  };
+  const remove = sp => {
+    if (!window.confirm("Remove “" + (sp.note || specialKind(sp.type).label) + "” (" + specialDateLabel(sp) + ")?\n\nThose days go back to being ordinary school days, and attendance hours recalculate.")) return;
+    upd(p => ({
+      ...p,
+      specialDays: (p.specialDays || []).filter(x => x.id !== sp.id)
+    }));
+    if (draft && draft.id === sp.id) setDraft(null);
+  };
+  return React.createElement("div", null, !list.length && React.createElement("p", {
+    className: "emp",
+    style: {
+      fontSize: 12
+    }
+  }, "Nothing on the calendar yet."), React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      gap: 6,
+      marginBottom: 12
+    }
+  }, list.map(sp => {
+    const k = specialKind(sp.type);
+    const editing = draft && draft.id === sp.id;
+    return React.createElement("div", {
+      key: sp.id,
+      style: {
+        border: "1px solid " + (editing ? "rgba(26,106,26,0.4)" : "var(--br)"),
+        borderRadius: 8,
+        padding: "9px 11px",
+        background: editing ? "rgba(26,106,26,0.05)" : "var(--bg)"
+      }
+    }, React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 10,
+        flexWrap: "wrap"
+      }
+    }, React.createElement("span", {
+      style: {
+        fontSize: 16,
+        lineHeight: "18px"
+      }
+    }, k.icon), React.createElement("div", {
+      style: {
+        minWidth: 0,
+        flex: 1
+      }
+    }, React.createElement("div", {
+      style: {
+        fontSize: 12,
+        fontWeight: 600
+      }
+    }, sp.note || k.label), React.createElement("div", {
+      style: {
+        fontSize: 11,
+        color: "var(--t2)",
+        marginTop: 1
+      }
+    }, specialDateLabel(sp), " \xB7 ", React.createElement("span", {
+      style: {
+        color: k.color,
+        fontWeight: 600
+      }
+    }, k.label), sp.type === "delay" ? " · " + (sp.hours !== undefined && sp.hours !== "" ? sp.hours : hpd / 2) + "h of " + hpd + "h held" : "")), React.createElement("div", {
+      style: {
+        display: "flex",
+        gap: 5
+      }
+    }, React.createElement("button", {
+      className: "bs",
+      style: {
+        fontSize: 10
+      },
+      onClick: () => {
+        setErr("");
+        setDraft(editing ? null : {
+          id: sp.id,
+          type: sp.type,
+          note: sp.note || "",
+          startDate: sp.startDate,
+          endDate: sp.endDate,
+          hours: sp.hours === undefined ? "" : String(sp.hours)
+        });
+      }
+    }, editing ? "Close" : "Edit"), React.createElement("button", {
+      className: "bs r",
+      style: {
+        fontSize: 10
+      },
+      onClick: () => remove(sp)
+    }, "Remove"))), editing && React.createElement(SpecialDayFields, {
+      draft: draft,
+      setDraft: setDraft,
+      hpd: hpd,
+      err: err,
+      onSave: save,
+      onCancel: () => {
+        setDraft(null);
+        setErr("");
+      }
+    }));
+  })), draft && !draft.id ? React.createElement("div", {
+    style: {
+      border: "1px solid rgba(26,106,26,0.4)",
+      borderRadius: 8,
+      padding: "9px 11px",
+      background: "rgba(26,106,26,0.05)"
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 12,
+      fontWeight: 600,
+      marginBottom: 2
+    }
+  }, "New calendar entry"), React.createElement(SpecialDayFields, {
+    draft: draft,
+    setDraft: setDraft,
+    hpd: hpd,
+    err: err,
+    onSave: save,
+    onCancel: () => {
+      setDraft(null);
+      setErr("");
+    }
+  })) : React.createElement("button", {
+    className: "bs a",
+    onClick: () => {
+      setErr("");
+      setDraft(blank());
+    }
+  }, "+ Add break, late start or cancellation"));
+}
+function SpecialDayFields({
+  draft,
+  setDraft,
+  hpd,
+  err,
+  onSave,
+  onCancel
+}) {
+  const set = (k, v) => setDraft(d => ({
+    ...d,
+    [k]: v
+  }));
+  return React.createElement("div", {
+    style: {
+      marginTop: 9
+    }
+  }, React.createElement("div", {
+    className: "fg",
+    style: {
+      marginBottom: 8
+    }
+  }, React.createElement("label", null, "Type"), React.createElement("select", {
+    className: "inp",
+    value: draft.type,
+    onChange: e => set("type", e.target.value)
+  }, React.createElement("option", {
+    value: "break"
+  }, "Holiday / Break \u2014 no school"), React.createElement("option", {
+    value: "cancel"
+  }, "Cancelled \u2014 no school (snow day, closure)"), React.createElement("option", {
+    value: "delay"
+  }, "Late start / early out \u2014 shortened day")), React.createElement("label", null, "Name"), React.createElement("input", {
+    className: "inp",
+    value: draft.note,
+    onChange: e => set("note", e.target.value),
+    placeholder: draft.type === "cancel" ? "e.g. Snow day" : draft.type === "delay" ? "e.g. Two-hour delay" : "e.g. Thanksgiving Break"
+  }), React.createElement("label", null, "From"), React.createElement("input", {
+    className: "inp",
+    type: "date",
+    value: draft.startDate,
+    onChange: e => set("startDate", e.target.value)
+  }), React.createElement("label", null, "To"), React.createElement("input", {
+    className: "inp",
+    type: "date",
+    value: draft.endDate,
+    min: draft.startDate || undefined,
+    onChange: e => set("endDate", e.target.value)
+  }), draft.type === "delay" && React.createElement(React.Fragment, null, React.createElement("label", null, "Hours held"), React.createElement("div", null, React.createElement("input", {
+    className: "inp",
+    type: "number",
+    min: "0",
+    max: hpd,
+    step: "0.25",
+    style: {
+      maxWidth: 120
+    },
+    value: draft.hours,
+    placeholder: String(hpd / 2),
+    onChange: e => set("hours", e.target.value)
+  }), React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "var(--t2)",
+      marginTop: 4,
+      lineHeight: 1.45
+    }
+  }, "How much of the ", hpd, "-hour day ran. A two-hour late start is ", Math.max(0, hpd - 2), ". Blank = half a day (", hpd / 2, ").")))), err && React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--red)",
+      marginBottom: 8
+    }
+  }, "\u26A0\uFE0F ", err), React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6
+    }
+  }, React.createElement("button", {
+    className: "bp",
+    style: {
+      fontSize: 11
+    },
+    onClick: onSave
+  }, draft.id ? "Save changes" : "Add to calendar"), React.createElement("button", {
+    className: "bg",
+    style: {
+      fontSize: 11
+    },
+    onClick: onCancel
+  }, "Cancel")));
+}
 function PwChecklist({
   pw,
   email
@@ -13759,6 +14141,27 @@ function Settings({
       }));
     }
   }, "Save School Year")), React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 16
+    }
+  }, React.createElement("div", {
+    style: {
+      fontSize: 13,
+      fontWeight: 600,
+      marginBottom: 4
+    }
+  }, "\uD83D\uDCC5 School Calendar \u2014 Breaks, Delays & Cancellations"), React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "var(--t2)",
+      marginBottom: 12,
+      lineHeight: 1.6
+    }
+  }, "These decide which days count as school days, so they drive attendance, the hours total and the Iowa projections. Families see the same list in their portal. A late start still counts as a school day, at the hours you record for it."), React.createElement(SpecialDayEditor, {
+    state: state,
+    upd: upd
+  })), React.createElement("div", {
     className: "card",
     style: {
       marginBottom: 16
@@ -15562,6 +15965,17 @@ function PortalEventsTab({
       }
     }, fmt(r.date), r.end && r.end !== r.date ? " – " + fmt(r.end) : "", r.sub ? " · " + r.sub : ""))))));
   })())), React.createElement("div", null, React.createElement("div", {
+    className: "card",
+    style: {
+      marginBottom: 18
+    }
+  }, React.createElement("div", {
+    className: "stit"
+  }, "\uD83C\uDFEB No School / Late Starts"), React.createElement(ClosureList, {
+    specialDays: state.specialDays,
+    sy: state.sy,
+    limitPast: true
+  })), React.createElement("div", {
     className: "card",
     style: {
       marginBottom: 18
