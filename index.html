@@ -11045,14 +11045,16 @@ function Reports({
     });
     const tot = hrsAtt(att, state.sy);
     const minHrsR = state.sy?.minHrs || DEFAULT_MIN_HRS;
+    const projected = tot + projWithRate(state.sy, state.specialDays, att);
     setRdata({
       s,
       mdn,
       pd,
       sw: sw2,
       tot,
-      mk: tot < minHrsR ? minHrsR - tot : 0,
-      minHrs: minHrsR
+      proj: projected,
+      minHrs: minHrsR,
+      mk: projected < minHrsR ? minHrsR - projected : 0
     });
     setShowPrint(true);
   };
@@ -11732,17 +11734,35 @@ function ProgressView({
       fontSize: 11,
       color: "var(--t3)"
     }
-  }, "None noted")))), mk > 0 && React.createElement("div", {
-    style: {
-      background: "rgba(248,113,113,.07)",
-      border: "1px solid rgba(248,113,113,.2)",
-      borderRadius: 8,
-      padding: 10,
-      fontSize: 12,
-      marginTop: 14,
-      color: "#fca5a5"
-    }
-  }, "\u26A0\uFE0F ", React.createElement("strong", null, "Makeup Hours Needed:"), " ", Math.ceil(mk), " additional hours required to reach the minimum of ", d.minHrs || DEFAULT_MIN_HRS, " hours. Current total: ", Math.round(tot), " hours.")));
+  }, "None noted")))), (() => {
+    const min = d.minHrs || DEFAULT_MIN_HRS;
+    const done = Math.round(tot),
+      proj = Math.round(d.proj || tot);
+    if (mk > 0) return React.createElement("div", {
+      style: {
+        background: "rgba(248,113,113,.07)",
+        border: "1px solid rgba(248,113,113,.35)",
+        borderRadius: 8,
+        padding: "10px 12px",
+        fontSize: 12,
+        marginTop: 14,
+        color: "var(--red)",
+        lineHeight: 1.6
+      }
+    }, "\u26A0\uFE0F ", React.createElement("strong", null, "Behind on hours."), " ", done, " hours attended so far. At this rate the year ends around ", React.createElement("strong", null, proj, " hours"), ", which is ", React.createElement("strong", null, Math.ceil(mk), " short"), " of the", " ", min, "-hour Iowa minimum. Making up ", Math.ceil(mk), " hours before the year ends would close the gap.");
+    return React.createElement("div", {
+      style: {
+        background: "rgba(22,163,74,.07)",
+        border: "1px solid rgba(22,163,74,.3)",
+        borderRadius: 8,
+        padding: "10px 12px",
+        fontSize: 12,
+        marginTop: 14,
+        color: "var(--acc)",
+        lineHeight: 1.6
+      }
+    }, "\u2713 ", React.createElement("strong", null, "On track for attendance hours."), " ", done, " hours attended so far; at this rate the year ends around ", React.createElement("strong", null, proj, " hours"), ", against the ", min, "-hour Iowa minimum.");
+  })()));
 }
 function TranscriptView({
   d,

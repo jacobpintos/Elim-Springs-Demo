@@ -3674,7 +3674,14 @@ function Reports({state}) {
       return {...p,sd,abs:ar.filter(r=>r.status==="absent").length,tar:ar.filter(r=>r.status==="tardy").length,avgB:bs.length?bs.reduce((s2,b)=>s2+b.score,0)/bs.length:null,incidentCount:incidents};
     });
     const tot=hrsAtt(att,state.sy);
-    const minHrsR=state.sy?.minHrs||DEFAULT_MIN_HRS; setRdata({s,mdn,pd,sw:sw2,tot,mk:tot<minHrsR?minHrsR-tot:0,minHrs:minHrsR});
+    const minHrsR=state.sy?.minHrs||DEFAULT_MIN_HRS;
+    // Compare against where the year is heading, not against the full-year
+    // minimum. Measuring hours-so-far against a whole year's requirement told
+    // every student in September they owed 700+ makeup hours — the year simply
+    // had not happened yet. This is the same projection the Attendance tab uses.
+    const projected=tot+projWithRate(state.sy,state.specialDays,att);
+    setRdata({s,mdn,pd,sw:sw2,tot,proj:projected,minHrs:minHrsR,
+      mk:projected<minHrsR?minHrsR-projected:0});
     setShowPrint(true);
   };
   const [transcriptYear,setTranscriptYear]=useState("current"); // "current" or archiveEntry.id
@@ -3965,9 +3972,23 @@ function ProgressView({d,onClose}) {
             </div>
           ))}
         </div>
-        {mk>0&&<div style={{background:"rgba(248,113,113,.07)",border:"1px solid rgba(248,113,113,.2)",borderRadius:8,padding:10,fontSize:12,marginTop:14,color:"#fca5a5"}}>
-          ⚠️ <strong>Makeup Hours Needed:</strong> {Math.ceil(mk)} additional hours required to reach the minimum of {d.minHrs||DEFAULT_MIN_HRS} hours. Current total: {Math.round(tot)} hours.
-        </div>}
+        {(()=>{
+          const min=d.minHrs||DEFAULT_MIN_HRS;
+          const done=Math.round(tot), proj=Math.round(d.proj||tot);
+          if(mk>0) return (
+            <div style={{background:"rgba(248,113,113,.07)",border:"1px solid rgba(248,113,113,.35)",borderRadius:8,padding:"10px 12px",fontSize:12,marginTop:14,color:"var(--red)",lineHeight:1.6}}>
+              ⚠️ <strong>Behind on hours.</strong> {done} hours attended so far. At this rate the year ends
+              around <strong>{proj} hours</strong>, which is <strong>{Math.ceil(mk)} short</strong> of the
+              {" "}{min}-hour Iowa minimum. Making up {Math.ceil(mk)} hours before the year ends would close the gap.
+            </div>
+          );
+          return (
+            <div style={{background:"rgba(22,163,74,.07)",border:"1px solid rgba(22,163,74,.3)",borderRadius:8,padding:"10px 12px",fontSize:12,marginTop:14,color:"var(--acc)",lineHeight:1.6}}>
+              ✓ <strong>On track for attendance hours.</strong> {done} hours attended so far; at this rate the
+              year ends around <strong>{proj} hours</strong>, against the {min}-hour Iowa minimum.
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
