@@ -668,6 +668,7 @@ function loadTeacher(user){
     window._appState = _appState;
     window._appUser = _appUser;
     _lastPersisted = _appState;
+    _baseRev = (_appState && _appState.rev) || 0;
     // Answers that arrived before this document did would otherwise be dropped.
     if(_lastResponses) _applyResponses(_lastResponses);
     if(window._renderApp) window._renderApp(_appState, _appUser);
@@ -1091,6 +1092,67 @@ window._undoActivity=function(entryId){
   return true;
 };
 
+
+// ─── Save health ────────────────────────────────────────────────────────────
+// state/main is one document, so a rejected write loses the whole save, not one
+// field. It used to end in console.error() — invisible to a teacher, who would
+// carry on working on a gradebook that had quietly stopped saving. Anything
+// that stops a save now says so on screen until it succeeds.
+var FIRESTORE_DOC_LIMIT=1048576;      // Firestore's hard per-document cap
+var DOC_WARN_AT=0.70, DOC_REFUSE_AT=0.95;
+var _saveBannerEl=null, _saveBannerKind="", _lastFailedWrite=null, _sizeWarned=false;
+// state/main is written as a whole document, so two staff saving within a few
+// seconds used to mean the second write silently erased the first. Each write
+// now carries a revision number and goes through a transaction that refuses to
+// overwrite a revision it has not seen. _baseRev is the newest revision this
+// browser has received from the server.
+var _baseRev=null;
+function _docBytes(o){
+  try{ return new TextEncoder().encode(JSON.stringify(o)).length; }
+  catch(e){ try{ return JSON.stringify(o).length; }catch(e2){ return 0; } }
+}
+function _dismissSaveBanner(){
+  if(_saveBannerEl&&_saveBannerEl.parentNode) _saveBannerEl.parentNode.removeChild(_saveBannerEl);
+  _saveBannerEl=null; _saveBannerKind="";
+}
+function _showSaveBanner(kind, msg, detail){
+  _dismissSaveBanner();
+  var bad=kind!=="warn";
+  var el=document.createElement("div");
+  el.id="save-banner";
+  el.style.cssText="position:fixed;left:0;right:0;top:0;z-index:400;padding:11px 16px;"+
+    "font:600 13px/1.45 Sora,system-ui,sans-serif;display:flex;gap:12px;align-items:flex-start;"+
+    "background:"+(bad?"#dc2626":"#d97706")+";color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.2)";
+  var txt=document.createElement("div");
+  txt.style.cssText="flex:1;min-width:0";
+  txt.innerHTML="<div>"+(bad?"⚠️ ":"")+msg+"</div>"+
+    (detail?"<div style='font-weight:400;font-size:11px;opacity:.9;margin-top:3px'>"+detail+"</div>":"");
+  el.appendChild(txt);
+  if(bad&&_lastFailedWrite){
+    var retry=document.createElement("button");
+    retry.textContent="Try again";
+    retry.style.cssText="background:#fff;color:#b91c1c;border:none;border-radius:7px;padding:6px 13px;"+
+      "font:700 12px inherit;cursor:pointer;flex-shrink:0";
+    retry.onclick=function(){ var w=_lastFailedWrite; _dismissSaveBanner(); if(w) _writeState(w); };
+    el.appendChild(retry);
+  }
+  var x=document.createElement("button");
+  x.textContent="✕"; x.title="Dismiss";
+  x.style.cssText="background:none;border:none;color:#fff;font-size:15px;cursor:pointer;flex-shrink:0;opacity:.85";
+  x.onclick=_dismissSaveBanner;
+  el.appendChild(x);
+  document.body.appendChild(el);
+  _saveBannerEl=el; _saveBannerKind=kind;
+}
+// Turn a Firestore error into something a teacher can act on.
+function _saveFailureText(e){
+  var code=(e&&e.code)||"";
+  if(code==="permission-denied") return ["Your last change wasn't saved.","You may have been signed out, or your account no longer has permission. Sign out and back in."];
+  if(code==="unavailable"||code==="deadline-exceeded") return ["Your last change hasn't saved yet.","Can't reach the server — check your internet connection. It will retry."];
+  if(code==="invalid-argument"||code==="resource-exhausted") return ["Your last change wasn't saved.","The school record has grown too large for one save. Contact your administrator — see DEPLOYMENT.md section 9b."];
+  return ["Your last change wasn't saved.",(code?code+": ":"")+((e&&e.message)||"Unknown error")];
+}
+
 function saveState(newState){
   // Only staff (admin/teacher) persist the master state document. For a
   // parent/student the rules reject the write anyway; short-circuit to avoid errors.
@@ -1123,12 +1185,86 @@ function saveState(newState){
         toWrite=Object.assign({},newState,{auditLog:log});
       }
     }
-    _school().collection("state").doc("main").set(toWrite).then(function(){
-      _lastPersisted=toWrite;
-      _appState=toWrite; window._appState=toWrite;
-      fanOutPortals(toWrite);
-    }).catch(function(e){console.error("Save error:",e);});
+    _writeState(toWrite);
   },1500);
+}
+// The write itself, separated so the banner's "Try again" can repeat it.
+function _writeState(toWrite){
+  var bytes=_docBytes(toWrite);
+  // Refuse rather than let Firestore reject it: at least this way the teacher is
+  // told before they keep working on a session that cannot be saved.
+  if(bytes>=FIRESTORE_DOC_LIMIT*DOC_REFUSE_AT){
+    _lastFailedWrite=null;
+    _showSaveBanner("error","This change can't be saved — the school record is full.",
+      Math.round(bytes/1024)+" KB of a "+Math.round(FIRESTORE_DOC_LIMIT/1024)+" KB limit. "+
+      "Archived school years are the usual cause. Contact your administrator before entering more.");
+    return;
+  }
+  if(bytes>=FIRESTORE_DOC_LIMIT*DOC_WARN_AT&&!_sizeWarned){
+    _sizeWarned=true;
+    _showSaveBanner("warn","The school record is getting close to its size limit.",
+      Math.round(bytes/1024)+" KB of "+Math.round(FIRESTORE_DOC_LIMIT/1024)+" KB used. "+
+      "Everything still works, but this needs attention before it fills — see DEPLOYMENT.md section 9b.");
+  }
+  var ref=_school().collection("state").doc("main");
+  var stamped=Object.assign({},toWrite);
+  var force=!!_forceNextWrite; _forceNextWrite=false;
+  window._db.runTransaction(function(tx){
+    return tx.get(ref).then(function(snap){
+      var serverRev=(snap.exists&&snap.data().rev)||0;
+      if(!force&&_baseRev!==null&&serverRev!==_baseRev){
+        var err=new Error("conflict"); err.__conflict=true; err.serverRev=serverRev;
+        err.who=(snap.exists&&snap.data().revBy)||"";
+        throw err;
+      }
+      stamped.rev=serverRev+1;
+      stamped.revAt=Date.now();
+      stamped.revBy=(_appUser&&(_appUser.name||_appUser.email))||"";
+      tx.set(ref,stamped);
+    });
+  }).then(function(){
+    _baseRev=stamped.rev;
+    _lastFailedWrite=null;
+    if(_saveBannerKind&&_saveBannerKind!=="warn") _dismissSaveBanner();
+    _lastPersisted=stamped;
+    _appState=stamped; window._appState=stamped;
+    fanOutPortals(stamped);
+  }).catch(function(e){
+    console.error("Save error:",e);
+    _lastFailedWrite=toWrite;
+    if(e&&e.__conflict){ _showConflictBanner(toWrite,e.who); return; }
+    var t=_saveFailureText(e);
+    _showSaveBanner("error",t[0],t[1]);
+  });
+}
+var _forceNextWrite=false;
+// A conflict is not an error to retry blindly — retrying would do exactly the
+// damage the check just prevented. Let the teacher choose.
+function _showConflictBanner(toWrite,who){
+  _dismissSaveBanner();
+  var el=document.createElement("div");
+  el.id="save-banner";
+  el.style.cssText="position:fixed;left:0;right:0;top:0;z-index:400;padding:11px 16px;"+
+    "font:600 13px/1.45 Sora,system-ui,sans-serif;display:flex;gap:12px;align-items:flex-start;"+
+    "background:#d97706;color:#fff;box-shadow:0 2px 10px rgba(0,0,0,0.2)";
+  var txt=document.createElement("div");
+  txt.style.cssText="flex:1;min-width:0";
+  txt.innerHTML="<div>⚠️ "+(who?who:"Someone else")+" changed the gradebook while you were editing.</div>"+
+    "<div style='font-weight:400;font-size:11px;opacity:.9;margin-top:3px'>Your last change was not saved, so it could not overwrite theirs. "+
+    "Reload to pick up their version, or keep yours — keeping yours replaces theirs.</div>";
+  el.appendChild(txt);
+  function btn(label,bg,fg,fn){
+    var b2=document.createElement("button"); b2.textContent=label;
+    b2.style.cssText="background:"+bg+";color:"+fg+";border:none;border-radius:7px;padding:6px 13px;"+
+      "font:700 12px inherit;cursor:pointer;flex-shrink:0";
+    b2.onclick=fn; el.appendChild(b2);
+  }
+  btn("Reload","#fff","#b45309",function(){ window.location.reload(); });
+  btn("Keep mine","rgba(255,255,255,0.2)","#fff",function(){
+    _forceNextWrite=true; _dismissSaveBanner(); _writeState(toWrite);
+  });
+  document.body.appendChild(el);
+  _saveBannerEl=el; _saveBannerKind="conflict";
 }
 
 // ─── Sign-in snapshots ──────────────────────────────────────────────────────

@@ -452,6 +452,52 @@ Both the Attendance banner and the monthly report read this from one function
 (`chronicRate()`), so they cannot disagree — they previously worked it out
 separately, and did.
 
+## 9b. Save health: failures, size and concurrent editing
+
+`state/main` is a single Firestore document holding the whole working
+gradebook. Firestore itself is replicated and checksummed — it does not corrupt
+data — but three things about writing one big document can lose work, and all
+three are now visible rather than silent.
+
+**A rejected save says so.** The write used to end in `console.error()`, which a
+teacher never sees; they would keep working on a gradebook that had stopped
+saving. A failed write now raises a red banner across the top of the page,
+naming the likely cause (signed out, offline, document too large) and offering
+**Try again**. It stays until a save succeeds.
+
+**Size is watched.** Firestore caps a document at 1 MB. The app measures each
+write:
+
+| At | What happens |
+|---|---|
+| 70% (~717 KB) | Amber banner, once per session. Everything still works. |
+| 95% (~996 KB) | The write is **refused** with an explanation, rather than letting Firestore reject it silently. |
+
+**Concurrent edits cannot silently overwrite each other.** Every write carries a
+`rev` number and goes through a transaction that refuses to overwrite a revision
+this browser has not seen. If another teacher saved while you were editing, your
+save is held and you are asked to choose:
+
+- **Reload** — take their version and redo your change.
+- **Keep mine** — deliberately replace theirs.
+
+There is no blind "retry" on a conflict, because retrying is exactly the
+overwrite the check just prevented. Deliberate whole-document replacements
+(restore a snapshot, Clear All Data, Create Demo Data) bypass the check by
+design — they are confirmed, destructive actions.
+
+### What fills the document
+
+Archived school years. Every promotion files one snapshot per student —
+including that year's attendance — into `state.history`, and nothing prunes it:
+
+| Roster | Added each June | Years until full |
+|---|---|---|
+| 10 students | ~175 KB | ~6 |
+| 15 students | ~263 KB | ~4 |
+| 20 students | ~351 KB | ~3 |
+| 25 students | ~439 KB | ~2 |
+
 ## 10. Excel export
 
 - **Gradebook → ⬇ Excel** exports the selected student's gradebook as an `.xlsx`
