@@ -486,17 +486,38 @@ overwrite the check just prevented. Deliberate whole-document replacements
 (restore a snapshot, Clear All Data, Create Demo Data) bypass the check by
 design — they are confirmed, destructive actions.
 
-### What fills the document
+### Archived school years live in their own collection
 
-Archived school years. Every promotion files one snapshot per student —
-including that year's attendance — into `state.history`, and nothing prunes it:
+Every promotion files one snapshot per student — that year's grades *and* all
+~180 attendance records, about 18 KB each. Kept inside `state/main` that
+accumulated forever, and nothing prunes it:
 
-| Roster | Added each June | Years until full |
+| Roster | Added each June | Years until `state/main` was full |
 |---|---|---|
 | 10 students | ~175 KB | ~6 |
 | 15 students | ~263 KB | ~4 |
 | 20 students | ~351 KB | ~3 |
 | 25 students | ~439 KB | ~2 |
+
+So the snapshots now live in **`archives/{id}`**, one document per student-year,
+while `state/main.history` keeps only a light index — who, which year, which
+grades they moved between. `state/main` is therefore bounded by *one school
+year* of live data and stops growing from June to June, at any roster size.
+
+- **Nothing changed on screen.** Archives are loaded once at sign-in and
+  hydrated back onto the in-memory copy, so transcripts, the History tab and the
+  family portal read `entry.snapshot` exactly as before. Only the stored
+  document is smaller.
+- **Migration is automatic.** The first staff sign-in after this update moves any
+  archives still inside `state/main` out to `archives/`, logs a line to the
+  console, and saves. Nothing to run by hand.
+- **Access:** `archives/{id}` is **staff-only** in the rules. Families never read
+  it — their own child's archived years reach them through
+  `portals/{studentId}`, which the app derives from these. Requires deploying
+  the updated `firestore.rules`.
+- **Clear All Data** wipes the archives collection along with the rest.
+- Restore points no longer carry archived years either; archives are
+  append-only records, not part of the working state a restore rolls back.
 
 ## 10. Excel export
 

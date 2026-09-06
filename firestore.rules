@@ -146,6 +146,12 @@ service cloud.firestore {
 
       // Daily gradebook snapshots (staff-only). Each doc is one day's full copy;
       // metadata lives in state.saves and the app prunes docs older than 30 days.
+      // Archived school years. Staff only — families get their own child's
+      // archived years through portals/{studentId}, which the app derives from
+      // these, so no family ever reads this collection directly.
+      match /archives/{archiveId} {
+        allow read, write: if isStaff(school);
+      }
       match /snapshots/{snapId} {
         allow read, write: if isStaff(school);
       }

@@ -280,7 +280,7 @@ function replaceStateInDb(newState, removeExtraLogins, label) {
       }).catch(()=>{})
     : Promise.resolve();
   const wipeCols=removeExtraLogins
-    ? Promise.all(["portals","responses","snapshots"].map(col=>school.collection(col).get().then(snap=>Promise.all(snap.docs.map(d=>d.ref.delete()))).catch(()=>{})))
+    ? Promise.all(["portals","responses","snapshots","archives"].map(col=>school.collection(col).get().then(snap=>Promise.all(snap.docs.map(d=>d.ref.delete()))).catch(()=>{})))
     : Promise.resolve();
   return Promise.all([cleanup,wipeCols])
     .then(()=>school.collection("state").doc("main").set(newState))

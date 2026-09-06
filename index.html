@@ -644,6 +644,9 @@ function _applyResponses(map){
 // ─── Teacher load path: subscribes to the master state document ─────────────
 function loadTeacher(user){
   showStatus("Loading school data…");
+  _loadArchives().then(function(){ _loadTeacherStreams(user); });
+}
+function _loadTeacherStreams(user){
   var stateRef=_school().collection("state").doc("main");
 
   _unsubs.push(stateRef.onSnapshot(function(snap){
@@ -669,6 +672,7 @@ function loadTeacher(user){
     window._appUser = _appUser;
     _lastPersisted = _appState;
     _baseRev = (_appState && _appState.rev) || 0;
+    _appState = _hydrateHistory(_appState);
     // Answers that arrived before this document did would otherwise be dropped.
     if(_lastResponses) _applyResponses(_lastResponses);
     if(window._renderApp) window._renderApp(_appState, _appUser);
@@ -1093,6 +1097,56 @@ window._undoActivity=function(entryId){
 };
 
 
+
+// ─── Archived school years ──────────────────────────────────────────────────
+// Promotion files a full snapshot of each student's year — that year's grades
+// AND all ~180 attendance records, about 18 KB each. Kept inside state/main
+// that accumulates forever: ten students fill the 1 MB document in roughly six
+// years, twenty in three.
+//
+// So the snapshots live in their own archives/{id} documents, while state.history
+// keeps only the light index (who, which year, which grades they moved between).
+// They are hydrated back onto the in-memory copy at sign-in, so every screen
+// that reads entry.snapshot — transcripts, the History tab, the portal — carries
+// on working unchanged. Only the stored document gets smaller.
+var _archiveCache={};
+function _hydrateHistory(st){
+  if(!st||!st.history||!st.history.length) return st;
+  return Object.assign({},st,{history:st.history.map(function(h){
+    return (h&&h.id&&!h.snapshot&&_archiveCache[h.id])?Object.assign({},h,{snapshot:_archiveCache[h.id]}):h;
+  })});
+}
+function _stripHistory(st){
+  if(!st||!st.history||!st.history.length) return st;
+  return Object.assign({},st,{history:st.history.map(function(h){
+    if(!h||!h.snapshot) return h;
+    var c=Object.assign({},h); delete c.snapshot; return c;
+  })});
+}
+function _loadArchives(){
+  return _school().collection("archives").get().then(function(qs){
+    qs.forEach(function(d){ var x=d.data()||{}; if(x.snapshot) _archiveCache[d.id]=x.snapshot; });
+  }).catch(function(e){ console.error("Could not load archived years:",e); });
+}
+// Any history entry still carrying its snapshot has not been filed yet — either
+// it was just created by a promotion, or it predates this split and is being
+// migrated. Write it out before the state document drops it.
+function _flushArchives(st){
+  var pending=((st&&st.history)||[]).filter(function(h){return h&&h.id&&h.snapshot&&!_archiveCache[h.id];});
+  if(!pending.length) return Promise.resolve();
+  return Promise.all(pending.map(function(h){
+    return _school().collection("archives").doc(h.id).set({
+      studentId:h.studentId||"", studentName:h.studentName||"",
+      schoolYear:h.schoolYear||"", archivedAt:h.archivedAt||"",
+      snapshot:h.snapshot
+    }).then(function(){ _archiveCache[h.id]=h.snapshot; });
+  }));
+}
+window._deleteArchive=function(id){
+  delete _archiveCache[id];
+  return _school().collection("archives").doc(id).delete().catch(function(){});
+};
+
 // ─── Save health ────────────────────────────────────────────────────────────
 // state/main is one document, so a rejected write loses the whole save, not one
 // field. It used to end in console.error() — invisible to a teacher, who would
@@ -1133,7 +1187,7 @@ function _showSaveBanner(kind, msg, detail){
     retry.textContent="Try again";
     retry.style.cssText="background:#fff;color:#b91c1c;border:none;border-radius:7px;padding:6px 13px;"+
       "font:700 12px inherit;cursor:pointer;flex-shrink:0";
-    retry.onclick=function(){ var w=_lastFailedWrite; _dismissSaveBanner(); if(w) _writeState(w); };
+    retry.onclick=function(){ var w=_lastFailedWrite; _dismissSaveBanner(); if(w) _writeStateNow(w); };
     el.appendChild(retry);
   }
   var x=document.createElement("button");
@@ -1190,6 +1244,9 @@ function saveState(newState){
 }
 // The write itself, separated so the banner's "Try again" can repeat it.
 function _writeState(toWrite){
+  _flushArchives(toWrite).then(function(){ _writeStateNow(_stripHistory(toWrite)); });
+}
+function _writeStateNow(toWrite){
   var bytes=_docBytes(toWrite);
   // Refuse rather than let Firestore reject it: at least this way the teacher is
   // told before they keep working on a session that cannot be saved.
@@ -1227,8 +1284,8 @@ function _writeState(toWrite){
     _lastFailedWrite=null;
     if(_saveBannerKind&&_saveBannerKind!=="warn") _dismissSaveBanner();
     _lastPersisted=stamped;
-    _appState=stamped; window._appState=stamped;
-    fanOutPortals(stamped);
+    _appState=_hydrateHistory(stamped); window._appState=_appState;
+    fanOutPortals(_appState);
   }).catch(function(e){
     console.error("Save error:",e);
     _lastFailedWrite=toWrite;
@@ -1261,7 +1318,7 @@ function _showConflictBanner(toWrite,who){
   }
   btn("Reload","#fff","#b45309",function(){ window.location.reload(); });
   btn("Keep mine","rgba(255,255,255,0.2)","#fff",function(){
-    _forceNextWrite=true; _dismissSaveBanner(); _writeState(toWrite);
+    _forceNextWrite=true; _dismissSaveBanner(); _writeStateNow(toWrite);
   });
   document.body.appendChild(el);
   _saveBannerEl=el; _saveBannerKind="conflict";
@@ -1293,8 +1350,8 @@ function _accountsForSnapshot(){
   });
 }
 function _stateForSnapshot(state){
-  var c=Object.assign({},state);
-  delete c.saves;      // don't nest snapshot history inside snapshots
+  var c=_stripHistory(Object.assign({},state));
+  delete c.saves;      // archived years live in archives/ and are append-only
   delete c.auditLog;   // the activity log is a separate audit trail
   return c;
 }
@@ -1313,6 +1370,13 @@ function maybeCaptureLoginSnapshot(){
   if(!_appState||!window._accounts) return;
   _snapStarted=true;
   captureLoginSnapshot();
+  // Archives written before the archives/ split still sit inside state/main.
+  // Move them out once, quietly, on the first sign-in after the upgrade.
+  var inline=((_appState.history)||[]).filter(function(h){return h&&h.id&&h.snapshot&&!_archiveCache[h.id];});
+  if(inline.length){
+    console.log("[Empower Iowa] moving "+inline.length+" archived year(s) out of state/main");
+    saveState(_appState);
+  }
 }
 function captureLoginSnapshot(){
   if(!_appUser||!_isStaffRole(_appUser.role)||!_appState) return;
@@ -1985,7 +2049,7 @@ function replaceStateInDb(newState, removeExtraLogins, label) {
     removedEmails = doomed.map(d => d.data().email || d.id);
     return Promise.all(doomed.map(d => d.ref.delete()));
   }).catch(() => {}) : Promise.resolve();
-  const wipeCols = removeExtraLogins ? Promise.all(["portals", "responses", "snapshots"].map(col => school.collection(col).get().then(snap => Promise.all(snap.docs.map(d => d.ref.delete()))).catch(() => {}))) : Promise.resolve();
+  const wipeCols = removeExtraLogins ? Promise.all(["portals", "responses", "snapshots", "archives"].map(col => school.collection(col).get().then(snap => Promise.all(snap.docs.map(d => d.ref.delete()))).catch(() => {}))) : Promise.resolve();
   return Promise.all([cleanup, wipeCols]).then(() => school.collection("state").doc("main").set(newState)).then(() => removeExtraLogins ? window._callFn("purgeNonAdminAuth", {}).catch(function () {
     return null;
   }) : null).then(function (purge) {
