@@ -414,10 +414,11 @@ These entries decide which days count as school days, so they drive attendance,
 the hours total and the Iowa projections — removing one turns those days back
 into ordinary school days and recalculates hours.
 
-**Families see the same list**, read-only, in their portal beside the calendar
-("No School / Late Starts"), with past entries folded away. It reaches them
-through the per-student portal document; closures are school-wide and contain no
-personal data.
+**Parents and students both see the same list**, read-only, in the portal beside
+the calendar ("No School / Late Starts"), with past entries folded away. Parent
+and student logins share the portal, so the list needs no separate role check.
+It reaches them through the per-student portal document; closures are
+school-wide and contain no personal data.
 
 ### Shortened days (late starts and early outs)
 

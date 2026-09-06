@@ -1073,7 +1073,7 @@ const TEACHER_TOUR=[
   {tab:"reports",title:"📋 Transcripts",body:"Official transcripts per student. Quarter columns fill in as you finalize quarters, and the final grade appears once every assigned quarter is closed."},
   {tab:"accounts",title:"👤 Accounts",body:"Everything to do with people. Add a student to the roster with or without a login, create the login later, and link parents — a parent can be linked to several children. Admins can also create other teacher and admin accounts here."},
   {tab:"activity",title:"📜 Activity",body:"Who changed what, and when — which event was created or deleted, whose grades were touched, and which family answered a permission slip. Every edit, account change, and restore is recorded, and your own changes from this sign-in can be undone one at a time. Entries are kept for 30 days and then deleted automatically. Teachers and admins only — families never see this."},
-  {tab:"settings",title:"⚙️ Settings",body:"School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar. School Calendar holds every break, late start and cancellation — families see the same list in their portal."},
+  {tab:"settings",title:"⚙️ Settings",body:"School year and quarter dates (⟳ Auto-Calculate divides them evenly), grading scale, hours per day, and minimum hours. Finalize a quarter here to lock its grades, and pick which four pages sit in the phone's bottom bar. School Calendar holds every break, late start and cancellation — parents and students see the same list in their portal."},
   {tab:"settings",title:"💾 Restore Points & Year End",body:"A full copy is saved each time a teacher or admin signs in, and the three newest are kept — restore one to undo a bad afternoon. Promote Students, further down, closes out the year: it archives everyone to their transcript first, then moves them up a grade."},
 ];
 
@@ -5192,7 +5192,7 @@ function Settings({state,upd}) {
         <div style={{fontSize:13,fontWeight:600,marginBottom:4}}>📅 School Calendar — Breaks, Delays &amp; Cancellations</div>
         <div style={{fontSize:11,color:"var(--t2)",marginBottom:12,lineHeight:1.6}}>
           These decide which days count as school days, so they drive attendance, the hours total and
-          the Iowa projections. Families see the same list in their portal. A late start still counts
+          the Iowa projections. Parents and students see the same list in their portal. A late start still counts
           as a school day, at the hours you record for it.
         </div>
         <SpecialDayEditor state={state} upd={upd}/>
