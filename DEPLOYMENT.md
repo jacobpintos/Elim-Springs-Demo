@@ -365,7 +365,8 @@ What counts as a school day comes from Settings, not from the calendar:
 - only the weekdays ticked under **School Days**,
 - only dates inside the **school year** start/end,
 - **breaks** and **cancellations** are skipped entirely,
-- a **late start** (delay) is filled in at **half** the daily hours.
+- a **late start** is filled in at the hours you recorded for that day (see
+  *Shortened days* below), falling back to half a day if you left it blank.
 
 So set the school year dates, the school days, and any breaks or snow days
 **before** running the backfill — otherwise you will record attendance on days
@@ -388,6 +389,52 @@ Iowa compliance projections follow automatically.
 Backfilled records are ordinary attendance records — they appear in the monthly
 report, the student's attendance log, the parent portal, and the hours total,
 exactly as if they had been entered on the day.
+
+### Correcting a past day
+
+**Attendance → 📋 Monthly Report** shows every student's month as a grid of
+days. **Every day in that grid is a button**: click it to set that student to
+present, absent, excused or tardy on that date, or to clear the record entirely.
+This is the fastest way to work through the exceptions after a backfill, because
+you can see the whole month at once.
+
+Every change is written to the **activity log** with the date and both sides of
+the change — `Attendance 2026-09-03 — Sofia Nguyen: present → absent`. A bulk
+run is collapsed to one line naming the size and range, so a backfill doesn't
+flood the log. Attendance is the kind of record a compliance question gets asked
+about later, so a correction made weeks after the fact stays findable.
+
+### Shortened days (late starts and early outs)
+
+**+ Break / Special Day → Late start / early out** takes an **Hours held**
+figure: how much of the day actually ran. A two-hour late start on a six-hour
+day is `4`. Leave it blank and it falls back to half a day.
+
+That figure is what the day is worth everywhere — attendance hours, the
+year-to-date total, and the remaining-hours projection. Earlier versions assumed
+every delay was exactly half a day, which under-counted a one-hour delay and
+over-counted a three-hour one.
+
+### Chronic absenteeism (Iowa SF2435)
+
+The rate is **non-exempt absences to date ÷ school days elapsed to date**, where
+a school day is the same definition used everywhere else (scheduled weekdays,
+inside the year, breaks and cancellations removed). Excused absences and
+tardies are not non-exempt absences and do not count toward it.
+
+Two things stop it producing nonsense:
+
+- **Only days that have happened count** — on both sides of the fraction. A
+  future-dated absence is not counted, and neither is a day the school has not
+  reached yet. The monthly report reports a month **to date** for the same
+  reason, so the month totals and the year-to-date figure agree.
+- **Nobody is rated until 10 school days have elapsed.** One absence in the
+  first week is 20%, which is arithmetic rather than a pattern; until then the
+  report shows the raw count and "too early in the year to rate".
+
+Both the Attendance banner and the monthly report read this from one function
+(`chronicRate()`), so they cannot disagree — they previously worked it out
+separately, and did.
 
 ## 10. Excel export
 

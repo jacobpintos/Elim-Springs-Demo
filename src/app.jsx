@@ -68,20 +68,33 @@ function pctAvg(arr) {
   const possible = v.reduce((s,a)=>s+(a.maxScore||100),0);
   return (earned/possible)*100;
 }
-// Hours one attendance record is worth. A "delay" day is half a school day
-// (projRemain counts it as 0.5), so a present student earns half the hours.
-function attHours(status, hpd, isDelay) {
-  const full=status==="present"||status==="excused"?hpd:status==="tardy"?hpd*0.75:0;
-  return isDelay?full/2:full;
+// How many hours of school a given date is worth. Breaks and cancellations are
+// zero. A late start is worth whatever the teacher recorded for it — schools run
+// one-hour and two-hour delays, not always a half day — and falls back to half a
+// day only when no figure was given.
+function dayHours(sy, specialDays, date) {
+  const hpd=(sy&&sy.hoursPerDay)||6;
+  const sp=(specialDays||[]).find(s=>s.startDate&&s.endDate&&date>=s.startDate&&date<=s.endDate);
+  if(!sp) return hpd;
+  if(sp.type!=="delay") return 0;
+  const h=parseFloat(sp.hours);
+  return isNaN(h)?hpd/2:Math.max(0,Math.min(hpd,h));
 }
-// Every day school is actually in session between two dates, inclusive:
-// a scheduled weekday, inside the school year, not a break or cancellation.
-// Delay days are in session at half length.
+// Hours one attendance record is worth, given the hours that day was worth.
+function attHours(status, hoursThatDay) {
+  const h=hoursThatDay||0;
+  return status==="present"||status==="excused"?h:status==="tardy"?h*0.75:0;
+}
+// Every day school is actually in session between two dates, inclusive: a
+// scheduled weekday, inside the school year, not a break or cancellation. Each
+// entry carries the hours that day is worth, so a shortened day is counted as
+// what it actually was.
 function schoolDaysInRange(sy, specialDays, from, to) {
   const out=[];
   if(!from||!to||from>to) return out;
   const dm={"Mon":1,"Tue":2,"Wed":3,"Thu":4,"Fri":5,"Sat":6,"Sun":0};
   const sched=(sy&&sy.scheduledDays)||DAYS;
+  const hpd=(sy&&sy.hoursPerDay)||6;
   const start=new Date(from+"T12:00:00"), end=new Date(to+"T12:00:00");
   if(isNaN(start.getTime())||isNaN(end.getTime())) return out;
   for(const d=new Date(start); d<=end; d.setDate(d.getDate()+1)){
@@ -91,9 +104,27 @@ function schoolDaysInRange(sy, specialDays, from, to) {
     if(!sched.some(dd=>dm[dd]===d.getDay())) continue;
     const sp=(specialDays||[]).find(s=>s.startDate&&s.endDate&&ds>=s.startDate&&ds<=s.endDate);
     if(sp&&sp.type!=="delay") continue;      // break or cancellation — no school
-    out.push({date:ds,delay:!!sp});
+    const hrs=dayHours(sy,specialDays,ds);
+    out.push({date:ds,hours:hrs,shortened:hrs<hpd});
   }
   return out;
+}
+// The non-exempt absence rate Iowa's chronic-absenteeism threshold is measured
+// against: absences to date over school days elapsed to date. `enough` is false
+// until a meaningful stretch of the year has passed — one absence in the first
+// week is 20%, which is arithmetic, not a pattern.
+const CHRONIC_MIN_DAYS=10;
+function chronicRate(state, studentId) {
+  const t=today();
+  const sy=state.sy||{};
+  const start=sy.startDate||t;
+  const upTo=(sy.endDate&&t>sy.endDate)?sy.endDate:t;
+  const elapsed=schoolDaysInRange(sy,state.specialDays,start,upTo).length;
+  const absences=(state.attendance[studentId]||[])
+    .filter(r=>r.status==="absent"&&r.date>=start&&r.date<=upTo).length;
+  return {elapsed,absences,
+    pct:elapsed?Math.min(100,Math.round((absences/elapsed)*100)):0,
+    enough:elapsed>=CHRONIC_MIN_DAYS};
 }
 function hrsAtt(recs, sy) {
   const filtered=(recs||[]).filter(r=>{
@@ -117,20 +148,16 @@ function projRemain(sy, specialDays, asOf) {
   if(refDate>=end) return 0;
   const hpd=sy.hoursPerDay||6;
   const dm={"Mon":1,"Tue":2,"Wed":3,"Thu":4,"Fri":5,"Sat":6,"Sun":0};
-  let c=0;
+  // Sum the hours each remaining day is actually worth, so a two-hour delay is
+  // counted as two hours rather than assumed to be half a day.
+  let hours=0;
   const d=new Date(ref+"T12:00:00"); d.setDate(d.getDate()+1);
   while(d<=end){
-    const ds=d.toISOString().slice(0,10);
-    const isSchoolDay=(sy.scheduledDays||DAYS).some(dd=>dm[dd]===d.getDay());
-    const sp=(specialDays||[]).find(s=>s.startDate&&s.endDate&&ds>=s.startDate&&ds<=s.endDate);
-    if(isSchoolDay){
-      if(!sp) c++;
-      else if(sp.type==="delay") c+=0.5;
-      // break/cancel = 0
-    }
+    const ds=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    if((sy.scheduledDays||DAYS).some(dd=>dm[dd]===d.getDay())) hours+=dayHours(sy,specialDays,ds);
     d.setDate(d.getDate()+1);
   }
-  return c*hpd;
+  return hours;
 }
 // Perfect-attendance projection (breaks subtracted, no absence rate applied)
 function projPerfect(sy, specialDays, asOf) { return projRemain(sy, specialDays, asOf); }
@@ -1038,7 +1065,7 @@ const TEACHER_TOUR=[
   {tab:"gradebook",title:"📊 Gradebook",body:"Pick a student, then a subject, then enter a score on each assignment. + Assignment opens a form that spells out what each field does, including which date decides the quarter. Export All to Excel gives you the whole class in one workbook."},
   {tab:"gradebook",title:"📅 Quarter View",body:"The View dropdown switches between quarters. Projected Final weights all quarters that have grades equally — the same figure that reaches the transcript once every quarter is closed."},
   {tab:"attendance",title:"📅 Attendance",body:"Mark each day Present, Absent, Excused, or Tardy. Attach an excuse document with 📎. 📋 generates the monthly Iowa compliance report."},
-  {tab:"attendance",title:"⏪ Starting mid-year",body:"Backfill Past Days fills in attendance for days that have already passed — set the school year, school days and any breaks in Settings first, then mark everyone present for the term and go back and fix the exceptions. It skips weekends, breaks and cancellations, and never touches a day you have already recorded."},
+  {tab:"attendance",title:"⏪ Starting mid-year",body:"Backfill Past Days fills in attendance for days that have already passed — set the school year, school days and any breaks in Settings first, then mark everyone present for the term. To fix the exceptions, open the Monthly Report: every day in each student's grid is a button you can click to change that day. Every change is recorded in the activity log with its date."},
   {tab:"behavior",title:"⭐ Behavior",body:"Students on the MDN scale get a 1–5 star rating. Students on letter grades get written incident entries. Both keep a dated history."},
   {tab:"notes",title:"📝 Notes",body:"Strengths and areas to work on, per student. These carry through onto progress reports for conferences."},
   {tab:"events",title:"🗓️ Events",body:"Create events, and tick Permission Slip when you need a parent's answer. Families see pending slips beside their calendar and can change their answer later. Quarter boundaries appear on the calendar automatically."},
@@ -2221,11 +2248,12 @@ function Attendance({state,upd,isMobile}) {
   const [uploadForm,setUploadForm]=useState({studentIds:[],startDate:today(),endDate:today(),note:"",file:null,fileName:"",fileType:""});
   const [uploadError,setUploadError]=useState("");
   const [reportMonth,setReportMonth]=useState(new Date().getFullYear()+"-"+String(new Date().getMonth()+1).padStart(2,"0")); // studentId
-  const [sp,setSp]=useState({type:"break",note:"",startDate:today(),endDate:today()});
+  const [sp,setSp]=useState({type:"break",note:"",startDate:today(),endDate:today(),hours:""});
   // Backfill: the school is adopting this mid-year, so past days need filling in.
   const [showBackfill,setShowBackfill]=useState(false);
   const [bf,setBf]=useState(null);
   const [bfDone,setBfDone]=useState(null);
+  const [editCell,setEditCell]=useState(null);   // {sid,date} being corrected in the monthly grid
 
   const hpd=state.sy?.hoursPerDay||6;
   const minHrs=state.sy?.minHrs||DEFAULT_MIN_HRS;
@@ -2233,11 +2261,8 @@ function Attendance({state,upd,isMobile}) {
   const syEnd=state.sy?.endDate||"";
   const outsideYear=syStart&&syEnd&&(date<syStart||date>syEnd);
 
-  // A delay day is worth half the usual hours; without this the two single-day
-  // paths would credit a full day on a two-hour late start.
-  const isDelayDay=d2=>(state.specialDays||[]).some(x=>x.type==="delay"&&x.startDate&&x.endDate&&d2>=x.startDate&&d2<=x.endDate);
   const setAtt=(sid,status)=>{
-    const hours=attHours(status,hpd,isDelayDay(date));
+    const hours=attHours(status,dayHours(state.sy,state.specialDays,date));
     upd(p=>{
       const recs=p.attendance[sid]||[];
       const idx=recs.findIndex(r=>r.date===date);
@@ -2287,7 +2312,7 @@ function Attendance({state,upd,isMobile}) {
         const idxByDate={};
         recs.forEach((r,i)=>{ idxByDate[r.date]=i; });
         days.forEach(d=>{
-          const rec={id:uid(),date:d.date,status,hours:attHours(status,h,d.delay)};
+          const rec={id:uid(),date:d.date,status,hours:attHours(status,d.hours)};
           if(idxByDate[d.date]===undefined){ idxByDate[d.date]=recs.length; recs.push(rec); }
           else if(overwrite){ recs[idxByDate[d.date]]=rec; }
         });
@@ -2297,7 +2322,22 @@ function Attendance({state,upd,isMobile}) {
     });
     setBfDone({...bfPlan,days:days.length,students:bfStudents.length,
       from:bf.from,to:bf.to,status,
-      delays:days.filter(d=>d.delay).length});
+      shortened:days.filter(d=>d.shortened).length});
+  };
+
+  // setAtt works on the day the page is showing; these take an explicit date so
+  // a past day can be corrected from the monthly report without navigating there.
+  const setAttOn=(sid,d,status)=>{
+    const hours=attHours(status,dayHours(state.sy,state.specialDays,d));
+    upd(p=>{
+      const recs=p.attendance[sid]||[];
+      const idx=recs.findIndex(r=>r.date===d);
+      const rec={id:uid(),date:d,status,hours};
+      return {...p,attendance:{...p.attendance,[sid]:idx>=0?recs.map((r,i)=>i===idx?rec:r):[...recs,rec].sort((a,b)=>a.date>b.date?1:-1)}};
+    });
+  };
+  const clearAttOn=(sid,d)=>{
+    upd(p=>({...p,attendance:{...p.attendance,[sid]:(p.attendance[sid]||[]).filter(r=>r.date!==d)}}));
   };
 
   const saveHours=(sid,val)=>{
@@ -2345,7 +2385,13 @@ function Attendance({state,upd,isMobile}) {
   };
 
   const addSpecialDay=()=>{
-    upd(p=>({...p,specialDays:[...(p.specialDays||[]),{id:uid(),type:sp.type,note:sp.note,startDate:sp.startDate,endDate:sp.endDate}]}));
+    const entry={id:uid(),type:sp.type,note:sp.note,startDate:sp.startDate,endDate:sp.endDate};
+    // Only a delay carries hours; a break or cancellation is always zero.
+    if(sp.type==="delay"){
+      const h=parseFloat(sp.hours);
+      entry.hours=isNaN(h)?hpd/2:Math.max(0,Math.min(hpd,h));
+    }
+    upd(p=>({...p,specialDays:[...(p.specialDays||[]),entry]}));
     setShowSp(false);
   };
 
@@ -2367,7 +2413,7 @@ function Attendance({state,upd,isMobile}) {
           <button className="bs a" onClick={()=>setShowUpload(true)}>📎 Upload Excuse</button>
           <button className="bp" style={{fontSize:11}} onClick={()=>{
             const hpd=state.sy?.hoursPerDay||6;
-            const hrs=attHours("present",hpd,isDelayDay(date));
+            const hrs=attHours("present",dayHours(state.sy,state.specialDays,date));
             upd(p=>{
               const newAtt={...p.attendance};
               p.students.forEach(s=>{
@@ -2456,7 +2502,7 @@ function Attendance({state,upd,isMobile}) {
               ?<div style={{background:"rgba(248,113,113,0.1)",border:"1px solid rgba(248,113,113,0.3)",borderRadius:7,padding:"9px 11px",fontSize:12,color:"var(--red)"}}>{bfError}</div>
               :<div style={{background:"var(--bg)",border:"1px solid var(--br)",borderRadius:7,padding:"10px 12px",fontSize:12,color:"var(--t2)",lineHeight:1.6}}>
                 <strong style={{color:"var(--t1)"}}>{bfDays.length}</strong> school day{bfDays.length===1?"":"s"} in range
-                {bfDays.filter(d=>d.delay).length?" ("+bfDays.filter(d=>d.delay).length+" late start"+(bfDays.filter(d=>d.delay).length===1?"":"s")+" at half hours)":""}
+                {bfDays.filter(d=>d.shortened).length?" ("+bfDays.filter(d=>d.shortened).length+" shortened day"+(bfDays.filter(d=>d.shortened).length===1?"":"s")+" credited at their own hours)":""}
                 {" · "}<strong style={{color:"var(--t1)"}}>{bfStudents.length}</strong> student{bfStudents.length===1?"":"s"}
                 <div style={{marginTop:4}}>
                   Will add <strong style={{color:"var(--acc)"}}>{bfPlan.add}</strong> record{bfPlan.add===1?"":"s"}
@@ -2483,11 +2529,23 @@ function Attendance({state,upd,isMobile}) {
           <label>Type</label>
           <select className="inp" value={sp.type} onChange={e=>setSp(f=>({...f,type:e.target.value}))}>
             <option value="break">Break / Holiday</option>
-            <option value="delay">Delay (counts as half day)</option>
+            <option value="delay">Late start / early out (partial day)</option>
             <option value="cancel">Cancellation (no hours)</option>
           </select>
           <label>Start Date</label><input className="inp" type="date" value={sp.startDate} onChange={e=>setSp(f=>({...f,startDate:e.target.value}))}/>
           <label>End Date</label><input className="inp" type="date" value={sp.endDate} onChange={e=>setSp(f=>({...f,endDate:e.target.value}))}/>
+          {sp.type==="delay"&&<>
+            <label>Hours held</label>
+            <div>
+              <input className="inp" type="number" min="0" max={hpd} step="0.25" style={{width:110}}
+                value={sp.hours} placeholder={String(hpd/2)}
+                onChange={e=>setSp(f=>({...f,hours:e.target.value}))}/>
+              <div style={{fontSize:10,color:"var(--t2)",marginTop:4,lineHeight:1.45}}>
+                How much of the {hpd}-hour day actually ran. A two-hour late start on a {hpd}-hour
+                day is {Math.max(0,hpd-2)}. Leave blank for half a day ({hpd/2}).
+              </div>
+            </div>
+          </>}
           <label>Label</label><input className="inp" value={sp.note} onChange={e=>setSp(f=>({...f,note:e.target.value}))} placeholder="e.g. Winter Break, Snow Day"/>
         </div>
         <div className="mda">
@@ -2591,44 +2649,34 @@ function Attendance({state,upd,isMobile}) {
           {state.students.map(s=>{
             const [y,m]=reportMonth.split("-").map(Number);
             const daysInMonth=new Date(y,m,0).getDate();
-            const schoolDays=[];
-            for(let d=1;d<=daysInMonth;d++){
-              const ds=y+"-"+String(m).padStart(2,"0")+"-"+String(d).padStart(2,"0");
-              const dow=new Date(ds+"T12:00:00").getDay();
-              if(dow<1||dow>5) continue; // skip weekends
-              const isCancelDay=(state.specialDays||[]).some(sp=>sp.type==="cancel"&&ds>=sp.startDate&&ds<=sp.endDate);
-              if(isCancelDay) continue; // skip cancellations
-              schoolDays.push(ds);
-            }
+            const monthStart=y+"-"+String(m).padStart(2,"0")+"-01";
+            const monthEnd=y+"-"+String(m).padStart(2,"0")+"-"+String(daysInMonth).padStart(2,"0");
+            // Same definition of a school day as everywhere else — the teacher's
+            // scheduled weekdays, inside the school year, breaks and
+            // cancellations removed. This used to assume Mon–Fri and only skip
+            // cancellations, so breaks inflated the count.
+            const schoolDays=schoolDaysInRange(state.sy,state.specialDays,monthStart,monthEnd)
+              .map(d=>d.date)
+              // A month still in progress is reported to date; counting days
+              // that have not happened yet made the month totals disagree with
+              // the year-to-date figure beside them.
+              .filter(d=>d<=today());
             const recs=state.attendance[s.id]||[];
             const present=schoolDays.filter(d=>recs.find(r=>r.date===d&&(r.status==="present"||r.status==="excused"))).length;
             const absent=schoolDays.filter(d=>recs.find(r=>r.date===d&&r.status==="absent")).length;
             const excused=schoolDays.filter(d=>recs.find(r=>r.date===d&&r.status==="excused")).length;
             const tardy=schoolDays.filter(d=>recs.find(r=>r.date===d&&r.status==="tardy")).length;
             const hrs=Math.round(hrsAtt(recs.filter(r=>r.date>=reportMonth+"-01"&&r.date<=reportMonth+"-31"),state.sy));
-            const nonExemptAbs=absent; // all absences non-exempt unless coded excused
-            const yTDrecs=recs.filter(r=>r.date>=(state.sy?.startDate||"")&&r.date<=today());
-            // Count actual school days elapsed (weekdays minus cancellations) for accurate pct
-            let yTDschoolDays=0;
-            {const syS=new Date((state.sy?.startDate||today())+"T12:00:00");
-             const yTDend=new Date(today()+"T12:00:00");
-             const syE=new Date((state.sy?.endDate||today())+"T12:00:00");
-             const iter=new Date(syS);
-             while(iter<=yTDend&&iter<=syE){
-               const ds2=iter.toISOString().slice(0,10);
-               const dow2=iter.getDay();
-               const isCancel=(state.specialDays||[]).some(sp=>sp.type==="cancel"&&ds2>=sp.startDate&&ds2<=sp.endDate);
-               if(dow2>=1&&dow2<=5&&!isCancel) yTDschoolDays++;
-               iter.setDate(iter.getDate()+1);
-             }}
-            const yTDnonExempt=yTDrecs.filter(r=>r.status==="absent").length;
-            const chronPct=yTDschoolDays?Math.round((yTDnonExempt/yTDschoolDays)*100):0;
+            const chron=chronicRate(state,s.id);
             return (
               <div key={s.id} style={{marginBottom:14,padding:10,border:"1px solid var(--br)",borderRadius:7}}>
                 <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
                   <span style={{fontWeight:600}}>{s.name} — {s.gradeLevel}</span>
-                  <span style={{color:chronPct>=10?"var(--red)":chronPct>=8?"var(--yel)":"var(--grn)"}}>
-                    YTD Non-Exempt Absences: {yTDnonExempt} ({chronPct}%){chronPct>=10?" ⚠️ CHRONIC":""}
+                  <span style={{color:!chron.enough?"var(--t2)":chron.pct>=10?"var(--red)":chron.pct>=8?"var(--yel)":"var(--grn)"}}>
+                    YTD non-exempt absences: {chron.absences} of {chron.elapsed} school day{chron.elapsed===1?"":"s"}
+                    {chron.enough
+                      ?" ("+chron.pct+"%)"+(chron.pct>=10?" ⚠️ CHRONIC":"")
+                      :" — too early in the year to rate"}
                   </span>
                 </div>
                 <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(28px,1fr))",gap:2,marginBottom:8}}>
@@ -2637,9 +2685,39 @@ function Attendance({state,upd,isMobile}) {
                     const st=rec?.status||"none";
                     const col=st==="present"?"var(--grn)":st==="excused"?"var(--pur)":st==="absent"?"var(--red)":st==="tardy"?"var(--yel)":"var(--br)";
                     const day=new Date(d+"T12:00:00").getDate();
-                    return <div key={d} title={d+" — "+st} style={{textAlign:"center",padding:"3px 0",borderRadius:3,background:col+"22",border:"1px solid "+col,fontSize:9,color:col,fontWeight:600}}>{day}</div>;
+                    const on=editCell&&editCell.sid===s.id&&editCell.date===d;
+                    // Every box is a button: this grid is the natural place to
+                    // correct a past day, especially straight after a backfill.
+                    return <button key={d} onClick={()=>setEditCell(on?null:{sid:s.id,date:d})}
+                      title={fmt(d)+" — "+(st==="none"?"not recorded":st)+" · click to change"}
+                      style={{textAlign:"center",padding:"3px 0",borderRadius:3,background:on?col+"55":col+"22",
+                        border:(on?"2px solid ":"1px solid ")+col,fontSize:9,color:col,fontWeight:600,
+                        cursor:"pointer",fontFamily:"inherit"}}>{day}</button>;
                   })}
                 </div>
+                {editCell&&editCell.sid===s.id&&(()=>{
+                  const cur=(recs.find(r=>r.date===editCell.date)||{}).status||"none";
+                  const hrsThatDay=dayHours(state.sy,state.specialDays,editCell.date);
+                  const full=(state.sy?.hoursPerDay||6);
+                  return (
+                    <div style={{background:"var(--bg)",border:"1px solid var(--br2)",borderRadius:7,padding:"9px 11px",marginBottom:8}}>
+                      <div style={{fontSize:11,fontWeight:600,marginBottom:2}}>{s.name} — {fmt(editCell.date)}</div>
+                      <div style={{fontSize:10,color:"var(--t2)",marginBottom:7}}>
+                        Currently {cur==="none"?"not recorded":cur}
+                        {hrsThatDay<full?" · shortened day worth "+hrsThatDay+"h":""}
+                      </div>
+                      <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                        {[["present","✓ Present"],["absent","✗ Absent"],["excused","📄 Excused"],["tardy","⏰ Tardy"]].map(([v,l])=>(
+                          <button key={v} className={"bs"+(cur===v?" p":"")} style={{fontSize:10}}
+                            onClick={()=>{setAttOn(s.id,editCell.date,v);setEditCell(null);}}>{l}</button>
+                        ))}
+                        {cur!=="none"&&<button className="bs r" style={{fontSize:10}}
+                          onClick={()=>{clearAttOn(s.id,editCell.date);setEditCell(null);}}>Clear</button>}
+                        <button className="bs" style={{fontSize:10}} onClick={()=>setEditCell(null)}>Cancel</button>
+                      </div>
+                    </div>
+                  );
+                })()}
                 <div style={{display:"flex",gap:16,fontSize:10,color:"var(--t2)"}}>
                   <span>Present: <strong>{present}</strong></span>
                   <span>Excused: <strong>{excused}</strong></span>
@@ -2651,7 +2729,7 @@ function Attendance({state,upd,isMobile}) {
             );
           })}
           <div style={{fontSize:10,color:"var(--t3)",marginTop:8}}>Legend: <span style={{color:"var(--grn)"}}>■ Present</span>  <span style={{color:"var(--pur)"}}>■ Excused</span>  <span style={{color:"var(--red)"}}>■ Absent</span>  <span style={{color:"var(--yel)"}}>■ Tardy</span>  <span style={{color:"var(--br)"}}>■ No record</span></div>
-          <div style={{fontSize:10,color:"var(--t3)",marginTop:4}}>Per Iowa SF2435: Chronic absenteeism = ≥10% non-exempt absences. Students approaching 10% are flagged. Excused absences (medical, IEP, religious, court) do not count toward chronic absenteeism threshold.</div>
+          <div style={{fontSize:10,color:"var(--t2)",marginTop:4,lineHeight:1.5}}>Per Iowa SF2435: chronic absenteeism = ≥10% non-exempt absences, measured as absences to date over school days elapsed to date. Excused absences (medical, IEP, religious, court) and tardies do not count toward it. Nobody is rated until {CHRONIC_MIN_DAYS} school days have elapsed. Click any day above to correct it.</div>
         </div>
         <div className="mda"><button className="bg" onClick={()=>setShowMonthly(false)}>Close</button></div>
       </div></div>}
@@ -2668,30 +2746,12 @@ function Attendance({state,upd,isMobile}) {
           const recs=(state.attendance[s.id]||[]).filter(r=>r&&r.date);
           const tot=hrsAtt(recs,state.sy);
           const days=recs.filter(r=>r.date>=( state.sy?.startDate||"")&&r.date<=(state.sy?.endDate||"9999")).length;
-          // Chronic absenteeism compares what has actually happened so far:
-          // absences up to today over school days elapsed to date. Counting the
-          // whole year's absences against zero elapsed days produced >100%.
-          const t3=today();
-          const absNonExempt=recs.filter(r=>r.status==="absent"&&r.date>=(state.sy?.startDate||"")&&r.date<=t3).length;
-          let daysElapsed=0;
-          {const DOW2={"Mon":1,"Tue":2,"Wed":3,"Thu":4,"Fri":5,"Sat":6,"Sun":0};
-           const sched2=state.sy?.scheduledDays||DAYS;
-           const syS2=new Date((state.sy?.startDate||t3)+"T12:00:00");
-           const now2=new Date(t3+"T12:00:00");
-           const syE2=new Date((state.sy?.endDate||t3)+"T12:00:00");
-           const it2=new Date(syS2);
-           while(it2<=now2&&it2<=syE2){
-             const ds3=it2.toISOString().slice(0,10);
-             const off2=(state.specialDays||[]).some(sp=>(sp.type==="cancel"||sp.type==="break")&&ds3>=sp.startDate&&ds3<=sp.endDate);
-             if(sched2.some(d=>DOW2[d]===it2.getDay())&&!off2) daysElapsed++;
-             it2.setDate(it2.getDate()+1);
-           }}
-          // Need a meaningful sample before flagging anyone.
-          if(daysElapsed<10) return null;
-          const chronPct=Math.min(100,Math.round((absNonExempt/daysElapsed)*100));
-          if(chronPct<8) return null;
+          // One calculation for the whole app — this banner and the monthly
+          // report used to work it out separately and disagree with each other.
+          const chron=chronicRate(state,s.id);
+          if(!chron.enough||chron.pct<8) return null;
           return <div key={s.id} style={{fontSize:11,background:"rgba(248,113,113,.07)",border:"1px solid rgba(248,113,113,.2)",borderRadius:6,padding:"5px 10px",color:"var(--red)"}}>
-            ⚠️ {s.name}: {chronPct}% non-exempt absences {chronPct>=10?"(CHRONICALLY ABSENT)":"(approaching 10%)"}
+            ⚠️ {s.name}: {chron.pct}% non-exempt absences ({chron.absences} of {chron.elapsed} days) {chron.pct>=10?"(CHRONICALLY ABSENT)":"(approaching 10%)"}
           </div>;
         })}
       </div>
@@ -3229,11 +3289,8 @@ function AttCalModal({state,upd,viewingAtt,onClose}) {
   const {date,sid}=viewingAtt;
   const hpd=state.sy?.hoursPerDay||6;
   const isAllStudents=!sid;
-  // A delay day is worth half the usual hours; without this the two single-day
-  // paths would credit a full day on a two-hour late start.
-  const isDelayDay=d2=>(state.specialDays||[]).some(x=>x.type==="delay"&&x.startDate&&x.endDate&&d2>=x.startDate&&d2<=x.endDate);
   const setAtt=(studentId,status)=>{
-    const hours=attHours(status,hpd,isDelayDay(date));
+    const hours=attHours(status,dayHours(state.sy,state.specialDays,date));
     upd(p=>{
       const recs=p.attendance[studentId]||[];
       const idx=recs.findIndex(r=>r.date===date);
@@ -3247,7 +3304,7 @@ function AttCalModal({state,upd,viewingAtt,onClose}) {
       p.students.forEach(s=>{
         const recs=p.attendance[s.id]||[];
         const idx=recs.findIndex(r=>r.date===date);
-        const rec={id:uid(),date,status:"present",hours:attHours("present",hpd,isDelayDay(date))};
+        const rec={id:uid(),date,status:"present",hours:attHours("present",dayHours(state.sy,state.specialDays,date))};
         newAtt[s.id]=idx>=0?recs.map((r,i)=>i===idx?rec:r):[...recs,rec];
       });
       return {...p,attendance:newAtt};
