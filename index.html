@@ -1652,6 +1652,14 @@ function doLogout(){
   _loggingIn=false;
   _clearListeners();
   _fannedOnce=false; _snapStarted=false; _lastResponses=null; _clearUndo();
+  // Drop the previous user entirely. Signing out used to leave _appUser and the
+  // whole school's data sitting in memory and on window, so on a shared device
+  // the next person's session began holding the last person's records — and any
+  // hiccup resolving their role left the previous screen underneath.
+  _appUser=null; _appState=null; _lastPersisted=null; _baseRev=null;
+  window._appUser=null; window._appState=null; window._accounts=null;
+  _archiveCache={};
+  if(window._renderApp){ try{ window._renderApp({},{}); }catch(e){} }
   window._auth.signOut().then(function(){
     document.getElementById("login-email").value="";
     document.getElementById("login-pw").value="";

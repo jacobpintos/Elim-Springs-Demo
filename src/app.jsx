@@ -6157,6 +6157,9 @@ function _AppRoot(){
     </div>
   );
 
+  // Belt and braces: the role is resolved during sign-in, but this component is
+  // the last gate before staff screens render, so it re-checks rather than
+  // trusting whatever it was last handed.
   if(user.role!=="admin"&&user.role!=="teacher"&&user.role!=="parent"&&user.role!=="student") return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",color:"#94a3b8",fontSize:14,textAlign:"center",padding:"0 24px"}}>Account not set up. Please contact your teacher.</div>
   );
