@@ -350,6 +350,15 @@ var _authResolved=false;
 function _showLoginScreen(){
   _authResolved=true;
   _loggingIn=false;
+  // A reason set just before a sign-out reload (idle timeout) is shown once.
+  try{
+    var why=sessionStorage.getItem("_signout_reason");
+    if(why){
+      sessionStorage.removeItem("_signout_reason");
+      var e2=document.getElementById("login-err");
+      if(e2){ e2.style.color="#94a3b8"; e2.textContent=why; e2.style.display="block"; }
+    }
+  }catch(e){}
   var l=document.getElementById("loading-app"); if(l) l.style.display="none";
   var a=document.getElementById("app-root"); if(a) a.style.display="none";
   var s=document.getElementById("login-screen"); if(s) s.style.display="flex";
@@ -1648,23 +1657,25 @@ function _handleMfaSignIn(error){
   })();
 }
 
-function doLogout(){
+function doLogout(reason){
   _loggingIn=false;
   _clearListeners();
   _fannedOnce=false; _snapStarted=false; _lastResponses=null; _clearUndo();
-  // Drop the previous user entirely. Signing out used to leave _appUser and the
-  // whole school's data sitting in memory and on window, so on a shared device
-  // the next person's session began holding the last person's records — and any
-  // hiccup resolving their role left the previous screen underneath.
+  // Drop the previous user entirely, then reload.
+  //
+  // Clearing the globals is not enough on its own to be sure an account switch
+  // is clean: React still holds the previous user and state, a listener
+  // callback can be in flight, and a signed-out admin's screen was reported
+  // surviving into a parent's sign-in. A reload makes that class of bug
+  // impossible rather than merely unlikely — nothing survives it. On a
+  // gradebook the extra second is a fair price for being certain.
   _appUser=null; _appState=null; _lastPersisted=null; _baseRev=null;
   window._appUser=null; window._appState=null; window._accounts=null;
   _archiveCache={};
   if(window._renderApp){ try{ window._renderApp({},{}); }catch(e){} }
-  window._auth.signOut().then(function(){
-    document.getElementById("login-email").value="";
-    document.getElementById("login-pw").value="";
-    _showLoginScreen();
-  });
+  try{ if(reason) sessionStorage.setItem("_signout_reason",reason); }catch(e){}
+  window._auth.signOut().then(function(){ window.location.reload(); })
+    .catch(function(){ window.location.reload(); });
 }
 
 // ─── Idle auto-logout ───────────────────────────────────────────────────────
@@ -1680,11 +1691,7 @@ setInterval(function(){
   var ms=(window._idleMinutes||20)*60*1000;
   if(window._auth&&window._auth.currentUser&&(Date.now()-_lastActivity)>ms){
     _lastActivity=Date.now();
-    try{ doLogout(); }catch(e){}
-    setTimeout(function(){
-      var el=document.getElementById("login-err");
-      if(el){ el.style.color="#94a3b8"; el.textContent="You were signed out after "+(window._idleMinutes||20)+" minutes of inactivity."; el.style.display="block"; }
-    },300);
+    try{ doLogout("You were signed out after "+(window._idleMinutes||20)+" minutes of inactivity."); }catch(e){}
   }
 },30*1000);
 
