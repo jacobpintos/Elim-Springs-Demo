@@ -21,6 +21,9 @@ the next build overwrites it.
 
 ## Documentation
 
+- `docs/HANDOVER.md` — **who owns what.** Account ownership, granting and
+  revoking access, running costs, and the outstanding setup checklist. Read this
+  first if you are taking the system over or handing it on.
 - `DEPLOYMENT.md` — security rules, roles, account creation, data isolation,
   snapshots, MFA, Cloud Functions, and the build step in detail.
 - `docs/DATA_PROTECTION_CHECKLIST.md` — what the app covers and what policy work remains.

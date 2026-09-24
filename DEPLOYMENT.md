@@ -13,6 +13,10 @@ to add teachers and parent/student logins.
 > `index.html`. Run `npm run build` after every change — see
 > [section 0](#0-editing-the-app-npm-run-build).
 
+> **Taking this over, or handing it on?** Start with
+> [`docs/HANDOVER.md`](docs/HANDOVER.md) — who owns which account, how to grant
+> and revoke access, what it costs, and what still needs setting up.
+
 ---
 
 ## 0. Editing the app (`npm run build`)
