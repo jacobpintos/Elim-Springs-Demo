@@ -24,7 +24,7 @@ problem, so they are listed separately.
 | --- | --- | --- | --- |
 | **The student data** | Every grade, attendance record, note and login | Firebase project **`elim-school-2abae`** | **The school** |
 | **The software** | The source code and the published web page | GitHub repository `⬜ org/repo` | The school (see §6) |
-| **The address** | The web address families type | DNS for `⬜ school domain` | The school (already) |
+| **The address** | The web address families type | DNS for `⬜ school domain` | The school (already) — setup steps in [`CUSTOM_DOMAIN.md`](CUSTOM_DOMAIN.md) |
 | **The bill** | Google Cloud billing account | `⬜ billing account name` | The school (see §7) |
 
 **The one that matters most is the first.** The student data lives in Firebase,

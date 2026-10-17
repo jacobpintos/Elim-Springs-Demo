@@ -24,6 +24,8 @@ the next build overwrites it.
 - `docs/HANDOVER.md` — **who owns what.** Account ownership, granting and
   revoking access, running costs, and the outstanding setup checklist. Read this
   first if you are taking the system over or handing it on.
+- `docs/CUSTOM_DOMAIN.md` — step-by-step runbook for moving the site onto the
+  school's own web address, written for people who have never touched DNS.
 - `DEPLOYMENT.md` — security rules, roles, account creation, data isolation,
   snapshots, MFA, Cloud Functions, and the build step in detail.
 - `docs/DATA_PROTECTION_CHECKLIST.md` — what the app covers and what policy work remains.
