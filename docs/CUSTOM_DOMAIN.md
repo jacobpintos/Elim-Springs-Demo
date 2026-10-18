@@ -262,3 +262,38 @@ code or the data.
 That is normal and appropriate — it is their domain. But it is worth both of you
 knowing it before families start using the address. See `docs/HANDOVER.md` for
 the wider ownership picture.
+
+## Appendix D — "Can I just get access and do it myself?"
+
+**Being named the Technical Contact does not help.** The contact roles in a
+domain's registration record (Registrant, Admin, Technical, Billing) are
+metadata — a name and an email address in WHOIS. They grant no login and no
+ability to change DNS. Registrars used to act on requests from the technical
+contact decades ago; today everything is gated behind the account login, so the
+role is decorative. Do not plan around it.
+
+What does work, best first:
+
+**1. Delegated account access.** Some registrars support proper scoped
+delegation — you get your own login with limited rights and nobody shares a
+password. GoDaddy calls it *Delegate Access*; Cloudflare has *Members* with a
+DNS-only role. Ask the client to look for **Delegate Access**, **Members**,
+**Users** or **Team** in their account settings.
+
+**2. Delegate the subdomain.** The client adds **NS records** for
+`gradebook.theirschool.org` pointing at nameservers you control — a free
+Cloudflare zone, for instance. You then own everything under that subdomain
+outright, with no access to their main domain at all. This is the right
+structure if DNS changes will be ongoing. One slightly larger ask up front, then
+they never hear from you about DNS again.
+
+**3. A shared registrar login.** Avoid. It hands you their entire domain
+including email, leaves no audit trail, and revoking it means a password change
+that may break other things.
+
+**For a one-off move, none of this is worth it.** Phase 1 asks the client for
+two minutes of work — less than arranging access would take. Pursue access only
+if the certificate fails to issue and you need to iterate on CAA records or the
+Cloudflare proxy setting without a day's round trip each time, or if you expect
+to add more subdomains later.
+
